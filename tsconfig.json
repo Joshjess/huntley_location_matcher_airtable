@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2017",
+    "lib": ["dom", "es2017"],
+    "jsx": "react",
+    "module": "esnext",
+    "moduleResolution": "node",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true
+  },
+  "include": ["frontend/**/*.ts", "frontend/**/*.tsx"],
+  "exclude": ["node_modules"]
+}
