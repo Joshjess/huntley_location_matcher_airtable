@@ -3,18 +3,18 @@
   "version": "1.0.0",
   "description": "Zoek vacatures op locatie met coördinaten-cascade (vacature → bedrijf → locatie)",
   "scripts": {
-    "start": "block start",
-    "build": "block build",
+    "start": "block run",
     "release": "block release"
   },
   "dependencies": {
-    "@airtable/blocks": "^0.0.54",
-    "react": "^16.13.1",
-    "react-dom": "^16.13.1"
+    "@airtable/blocks": "^1.19.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2"
   },
   "devDependencies": {
-    "@airtable/blocks-cli": "^2.0.0",
-    "@airtable/blocks-webpack-bundler": "^0.0.3",
-    "@types/react": "^16.14.0"
+    "@airtable/blocks-cli": "^3.0.1",
+    "@airtable/blocks-webpack-bundler": "^1.1.1",
+    "@types/react": "^17.0.91"
   }
 }

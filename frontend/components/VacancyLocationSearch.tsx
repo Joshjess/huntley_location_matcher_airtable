@@ -1,171 +1,104 @@
-import React, { useState } from "react";
-import {
-  useBase,
-  useRecords,
-  useGlobalConfig,
-  expandRecord,
-  Box,
-  Text,
-  Heading,
-  Button,
-  Loader,
-} from "@airtable/blocks/ui";
-import { Record } from "@airtable/blocks/models";
-import { useVacancySearch } from "../hooks/useVacancySearch";
-import { SettingsPanel } from "./SettingsPanel";
+import React, { useCallback } from "react";
+import { WarningCircle } from "@phosphor-icons/react";
+import { useLocationSearch } from "../hooks/useLocationSearch";
 import { SearchBar } from "./SearchBar";
 import { GeocodedLocationInfo } from "./GeocodedLocationInfo";
 import { StatsBar } from "./StatsBar";
 import { SearchResults } from "./SearchResults";
 
 export function VacancyLocationSearch(): React.ReactElement {
-  const base = useBase();
-  const globalConfig = useGlobalConfig();
-  const [showSettings, setShowSettings] = useState(false);
-
-  // Resolve tables from config
-  const vacancyTableId = globalConfig.get("vacancyTableId") as
-    | string
-    | undefined;
-  const companyTableId = globalConfig.get("companyTableId") as
-    | string
-    | undefined;
-  const locationTableId = globalConfig.get("locationTableId") as
-    | string
-    | undefined;
-
-  const vacancyTable = vacancyTableId
-    ? base.getTableByIdIfExists(vacancyTableId)
-    : null;
-  const companyTable = companyTableId
-    ? base.getTableByIdIfExists(companyTableId)
-    : null;
-  const locationTable = locationTableId
-    ? base.getTableByIdIfExists(locationTableId)
-    : null;
-
-  // Load records (cast needed: useRecords overloads don't accept Table | null directly)
-  const vacancyRecords = useRecords(vacancyTable as null) as Record[] | null;
-  const companyRecords = useRecords(companyTable as null) as Record[] | null;
-  const locationRecords = useRecords(locationTable as null) as Record[] | null;
-
   const {
+    searchMode,
+    setSearchMode,
     locationQuery,
     setLocationQuery,
     radius,
     setRadius,
+    filters,
+    setFilters,
     results,
     geocodedLocation,
     isSearching,
     error,
     stats,
     handleSearch,
-  } = useVacancySearch({
-    vacancyTable,
-    companyTable,
-    locationTable,
-    vacancyRecords,
-    companyRecords,
-    locationRecords,
-    globalConfig,
-  });
+    handleExpand,
+  } = useLocationSearch();
 
-  const handleExpand = (record: Record): void => {
-    expandRecord(record);
-  };
+  const handleFilterChange = useCallback(
+    (fieldId: string, values: string[]) => {
+      setFilters((prev) => ({ ...prev, [fieldId]: values }));
+    },
+    [setFilters],
+  );
+
+  const title = searchMode === "vacancy"
+    ? "Vacatures zoeken op locatie"
+    : "Bedrijven zoeken op locatie";
+  const subtitle = searchMode === "vacancy"
+    ? "Zoek vacatures binnen een straal van een locatie"
+    : "Zoek bedrijven binnen een straal van een locatie";
+  const loadingText = searchMode === "vacancy"
+    ? "Vacatures doorzoeken en afstanden berekenen..."
+    : "Bedrijven doorzoeken en afstanden berekenen...";
 
   return (
-    <Box padding={3} backgroundColor="lightGray1" minHeight="100vh">
-      {/* Header */}
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        marginBottom={3}
-      >
-        <Box>
-          <Heading size="xlarge">🔍 Vacatures zoeken op locatie</Heading>
-          <Text textColor="light" marginTop={1}>
-            Zoek vacatures binnen een straal van een locatie
-          </Text>
-        </Box>
-        <Button
-          icon="cog"
-          variant="secondary"
-          onClick={() => setShowSettings(!showSettings)}
-          aria-label="Instellingen"
-        >
-          {showSettings ? "Sluiten" : "Instellingen"}
-        </Button>
-      </Box>
+    <div className="page-container">
+      <div className="page-header">
+        <h1 className="page-title">{title}</h1>
+        <p className="page-subtitle">{subtitle}</p>
+      </div>
 
-      {/* Settings */}
-      {showSettings && <SettingsPanel />}
-
-      {/* Search bar */}
       <SearchBar
+        searchMode={searchMode}
+        onSearchModeChange={setSearchMode}
         locationQuery={locationQuery}
         onLocationQueryChange={setLocationQuery}
         radius={radius}
         onRadiusChange={setRadius}
+        filters={filters}
+        onFilterChange={handleFilterChange}
         onSearch={handleSearch}
         isSearching={isSearching}
       />
 
-      {/* Loading */}
       {isSearching && (
-        <Box
-          display="flex"
-          justifyContent="center"
-          alignItems="center"
-          padding={4}
-        >
-          <Loader scale={0.5} />
-          <Text marginLeft={2}>
-            Vacatures doorzoeken en afstanden berekenen...
-          </Text>
-        </Box>
+        <div className="loading-container">
+          <div className="spinner" />
+          <span className="loading-text">{loadingText}</span>
+        </div>
       )}
 
-      {/* Error */}
       {error && (
-        <Box
-          padding={3}
-          marginBottom={3}
-          backgroundColor="redLight1"
-          borderRadius="large"
-        >
-          <Text textColor="redDark1">⚠️ {error}</Text>
-        </Box>
+        <div className="error-box">
+          <WarningCircle size={20} weight="fill" className="error-icon" />
+          <span className="error-text">{error}</span>
+        </div>
       )}
 
-      {/* Geocoded location info */}
       {geocodedLocation && !isSearching && (
         <GeocodedLocationInfo location={geocodedLocation} radius={radius} />
       )}
 
-      {/* Stats bar */}
-      {stats && !isSearching && <StatsBar stats={stats} />}
+      {stats && !isSearching && <StatsBar stats={stats} searchMode={searchMode} />}
 
-      {/* Results list */}
-      {results && !isSearching && (
-        <SearchResults results={results} onExpand={handleExpand} />
+      {results && stats && !isSearching && (
+        <SearchResults
+          results={results}
+          stats={stats}
+          radius={radius}
+          searchMode={searchMode}
+          onExpand={handleExpand}
+        />
       )}
 
-      {/* Empty state */}
       {!results && !isSearching && !error && (
-        <Box
-          padding={4}
-          textAlign="center"
-          backgroundColor="white"
-          borderRadius="large"
-          border="default"
-        >
-          <Text size="large" textColor="light">
+        <div className="card empty-state">
+          <p className="empty-state__title">
             Voer een locatie in en klik op &quot;Zoeken&quot; om te starten
-          </Text>
-        </Box>
+          </p>
+        </div>
       )}
-    </Box>
+    </div>
   );
 }

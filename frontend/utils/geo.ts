@@ -1,9 +1,16 @@
 import { GeocodedLocation } from "../types";
 
-interface NominatimResult {
-  readonly lat: string;
-  readonly lon: string;
-  readonly display_name: string;
+interface OpenMeteoGeocodingResult {
+  readonly id: number;
+  readonly name: string;
+  readonly latitude: number;
+  readonly longitude: number;
+  readonly country?: string;
+  readonly admin1?: string;
+}
+
+interface OpenMeteoGeocodingResponse {
+  readonly results?: OpenMeteoGeocodingResult[];
 }
 
 export function haversineKm(
@@ -26,15 +33,17 @@ export function haversineKm(
 export async function geocodeLocation(
   query: string,
 ): Promise<GeocodedLocation | null> {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=nl`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "AirtableVacancySearch/1.0" },
-  });
-  const data: NominatimResult[] = await res.json();
-  if (!data.length) return null;
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=nl&format=json&countryCode=NL`;
+  const res = await fetch(url);
+  const data: OpenMeteoGeocodingResponse = await res.json();
+  if (!data.results?.length) return null;
+  const top = data.results[0];
+  const displayName = [top.name, top.admin1, top.country]
+    .filter(Boolean)
+    .join(", ");
   return {
-    lat: parseFloat(data[0].lat),
-    lon: parseFloat(data[0].lon),
-    displayName: data[0].display_name,
+    lat: top.latitude,
+    lon: top.longitude,
+    displayName,
   };
 }
