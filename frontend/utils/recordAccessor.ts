@@ -107,6 +107,24 @@ export function fromSdkRecord(record: AirtableRecord, table: Table): RecordAcces
 }
 
 // ---------------------------------------------------------------------------
+// Link override wrapper — injects REST-fetched link data into an SDK accessor
+// Used because the SDK can't see certain linked record fields on Bedrijven.
+// ---------------------------------------------------------------------------
+
+export function withLinkOverrides(
+  base: RecordAccessor,
+  overrides: Record<string, string[]>,
+): RecordAccessor {
+  return {
+    ...base,
+    getLinkedIds(fieldId: string): string[] {
+      if (fieldId in overrides) return overrides[fieldId];
+      return base.getLinkedIds(fieldId);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // REST Record Adapter (field-ID keyed objects from fetchRecordsByFormula)
 // ---------------------------------------------------------------------------
 
@@ -143,7 +161,9 @@ export function fromRestRecord(rec: RestRecordInput, primaryFieldId?: string): R
     getLinkedIds(fieldId: string): string[] {
       const val = fields[fieldId];
       if (!Array.isArray(val)) return [];
-      return (val as Array<{ id: string }>).map((l) => l.id);
+      return (val as Array<string | { id: string }>).map((l) =>
+        typeof l === "string" ? l : l.id,
+      );
     },
 
     getFilterValue(fieldId: string): FilterValue {
@@ -189,10 +209,10 @@ export function fromRestRecord(rec: RestRecordInput, primaryFieldId?: string): R
 }
 
 // ---------------------------------------------------------------------------
-// CMA Record Adapter (field-name keyed objects from fetchCmaVacancies)
+// Vacature scraper Record Adapter (field-name keyed objects from fetchVacatureScraperVacancies)
 // ---------------------------------------------------------------------------
 
-interface CmaRecordInput {
+interface VacatureScraperRecordInput {
   readonly id: string;
   readonly name: string;
   readonly lat: number;
@@ -201,7 +221,7 @@ interface CmaRecordInput {
   readonly fields: Record<string, unknown>;
 }
 
-export function fromCmaRecord(rec: CmaRecordInput): RecordAccessor {
+export function fromVacatureScraperRecord(rec: VacatureScraperRecordInput): RecordAccessor {
   const fields = rec.fields;
 
   return {
@@ -211,7 +231,7 @@ export function fromCmaRecord(rec: CmaRecordInput): RecordAccessor {
     fieldIds: Object.keys(fields),
 
     getFloat(fieldId: string): number | null {
-      // CMA records use field names, support both "Latitude"/"Longitude" and direct access
+      // Vacature scraper records use field names, support both "Latitude"/"Longitude" and direct access
       const val = fields[fieldId];
       if (val == null) return null;
       const num = parseFloat(String(val));
@@ -219,7 +239,7 @@ export function fromCmaRecord(rec: CmaRecordInput): RecordAccessor {
     },
 
     getLinkedIds(_fieldId: string): string[] {
-      // CMA records don't use linked records in the resolution chain
+      // Vacature scraper records don't use linked records in the resolution chain
       return [];
     },
 
@@ -271,7 +291,7 @@ export function fromCmaRecord(rec: CmaRecordInput): RecordAccessor {
 
 /**
  * Build a lowercased keyword haystack from a RecordAccessor.
- * Works uniformly for SDK, REST, and CMA records.
+ * Works uniformly for SDK, REST, and Vacature scraper records.
  */
 export function buildKeywordHaystack(
   accessor: RecordAccessor,

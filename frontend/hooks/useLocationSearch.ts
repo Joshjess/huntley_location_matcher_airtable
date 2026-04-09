@@ -12,13 +12,13 @@ import {
   FilterDefinition,
 } from "../types";
 import { geocodeLocation } from "../utils/geo";
-import { resolveSchema, buildStructuralFieldIds, discoverFilterFields, getFilterFieldNameMap } from "../utils/config";
+import { SCHEMA, getFilterTemplates } from "../utils/config";
 import { matchesKeywordQuery } from "../utils/keywordHaystack";
 import { buildCompanyKeywordHaystack, buildCandidateKeywordHaystack } from "../utils/keywordHaystack";
 import { FilterMap, applyFilters } from "../utils/filters";
 import { BaseStats } from "../utils/searchProcessor";
-import { processVacancyRecords, processSimpleRecords, processCmaRecords } from "../utils/searchProcessor";
-import { fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchCmaData } from "../utils/dataFetcher";
+import { processVacancyRecords, processSimpleRecords, processVacatureScraperRecords } from "../utils/searchProcessor";
+import { fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchVacatureScraperData } from "../utils/dataFetcher";
 
 export type { FilterMap } from "../utils/filters";
 
@@ -47,30 +47,26 @@ interface UseLocationSearchReturn {
   setDateRange: React.Dispatch<React.SetStateAction<DateRange>>;
 }
 
-export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
+export function useLocationSearch(vacatureScraperPat: string): UseLocationSearchReturn {
   const base = useBase();
 
-  const schema = useMemo(() => resolveSchema(base), [base]);
-  const structuralFieldIds = useMemo(
-    () => schema ? buildStructuralFieldIds(schema) : new Set<string>(),
-    [schema],
-  );
-  const vacancyExclude = useMemo(() => schema ? new Set([
+  const schema = SCHEMA;
+  const vacancyExclude = useMemo(() => new Set([
     schema.vacancy.latFieldId,
     schema.vacancy.lonFieldId,
     schema.vacancy.companyLinkFieldId,
-  ]) : new Set<string>(), [schema]);
-  const companyExclude = useMemo(() => schema ? new Set([
+  ]), [schema]);
+  const companyExclude = useMemo(() => new Set([
     schema.company.latFieldId,
     schema.company.lonFieldId,
-  ]) : new Set<string>(), [schema]);
+  ]), [schema]);
 
   const [searchMode, setSearchModeRaw] = useState<SearchMode>("vacancy");
   const [locationQuery, setLocationQuery] = useState("");
   const [radius, setRadius] = useState("25");
   const [filters, setFilters] = useState<FilterMap>({});
   const [keywordQuery, setKeywordQuery] = useState("");
-  const [searchSources, setSearchSources] = useState<SearchSourceConfig>({ local: true, cma: false });
+  const [searchSources, setSearchSources] = useState<SearchSourceConfig>({ local: true, vacatureScraper: false });
   const [dateRange, setDateRange] = useState<DateRange>({ from: "", to: "" });
   const [unfilteredResults, setUnfilteredResults] = useState<SearchResult[] | null>(null);
   const [baseStats, setBaseStats] = useState<BaseStats | null>(null);
@@ -132,7 +128,7 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
       }
     }
 
-    const cmaMatched = filtered.filter((r) => r.source === "cma").length;
+    const vacatureScraperMatched = filtered.filter((r) => r.source === "vacatureScraper").length;
 
     const stats: SearchStats = {
       total: baseStats.total,
@@ -147,43 +143,42 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
       withoutAlternativeLocations: baseStats.withoutAlternativeLocations,
       withoutAlternativeLocationCoords: baseStats.withoutAlternativeLocationCoords,
       filteredOut,
-      cmaTotal: baseStats.cmaTotal,
-      cmaMatched,
+      vacatureScraperTotal: baseStats.vacatureScraperTotal,
+      vacatureScraperMatched,
     };
 
     return { results: filtered, stats };
   }, [unfilteredResults, baseStats, filters, keywordQuery, dateRange]);
 
   // ---------------------------------------------------------------------------
-  // Filter field metadata (runs on startup / mode change)
+  // Filter field metadata — templates are hardcoded, options from SDK metadata
   // ---------------------------------------------------------------------------
   const fieldMetadata = useMemo(() => {
-    if (!schema) return [];
+    const templates = getFilterTemplates(searchMode);
     const tableId = searchMode === "vacancy"
       ? schema.vacancy.tableId
       : searchMode === "company"
         ? schema.company.tableId
         : schema.candidate.tableId;
     const table = base.getTableByIdIfExists(tableId);
-    if (!table) return [];
-
-    const templates = discoverFilterFields(table, structuralFieldIds);
 
     return templates.map((template) => {
-      const field = table.getFieldByIdIfExists(template.fieldId);
       let metadataOptions: string[] = [];
-      if (field) {
-        try {
-          const cfg = field.config;
-          const choices = (cfg.options as { choices?: Array<{ name: string }> })?.choices;
-          if (choices && choices.length > 0) {
-            metadataOptions = choices.map((c) => c.name).filter(Boolean).sort((a, b) => a.localeCompare(b, "nl"));
-          }
-        } catch { /* ignore */ }
+      if (table) {
+        const field = table.getFieldByIdIfExists(template.fieldId);
+        if (field) {
+          try {
+            const cfg = field.config;
+            const choices = (cfg.options as { choices?: Array<{ name: string }> })?.choices;
+            if (choices && choices.length > 0) {
+              metadataOptions = choices.map((c) => c.name).filter(Boolean).sort((a, b) => a.localeCompare(b, "nl"));
+            }
+          } catch { /* ignore */ }
+        }
       }
       return { ...template, metadataOptions };
     });
-  }, [base, searchMode, schema, structuralFieldIds]);
+  }, [base, searchMode, schema]);
 
   // Build final filters: use result-based options when available, fall back to metadata
   const dynamicFilters: FilterDefinition[] = useMemo(() => {
@@ -216,12 +211,7 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
       return;
     }
 
-    if (!schema) {
-      setError("Tabellen niet gevonden. Controleer of de tabellen Vacatures, Bedrijven, Kandidaten en Locaties bestaan met Latitude/Longitude velden.");
-      return;
-    }
-
-    if (searchMode !== "candidate" && !searchSources.local && !searchSources.cma) {
+    if (searchMode !== "candidate" && !searchSources.local && !searchSources.vacatureScraper) {
       setError("Selecteer minstens één bron om in te zoeken.");
       return;
     }
@@ -232,7 +222,7 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
     setBaseStats(null);
     unloadCachedQuery();
 
-    const pat = cmaPat.trim();
+    const pat = vacatureScraperPat.trim();
     const usePat = pat.length > 0 ? pat : null;
 
     try {
@@ -252,7 +242,8 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
       }
 
       if (searchMode === "candidate") {
-        const data = await fetchCandidateData(base, usePat, geo, maxDist, schema, structuralFieldIds);
+        const filterTemplates = getFilterTemplates("candidate");
+        const data = await fetchCandidateData(base, schema);
         const result = processSimpleRecords({
           mode: "candidate",
           records: data.records,
@@ -260,7 +251,7 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
           maxDist,
           latFieldId: schema.candidate.latFieldId,
           lonFieldId: schema.candidate.lonFieldId,
-          filterFieldIds: data.filterFieldIds,
+          filterFieldIds: filterTemplates,
           buildHaystack: buildCandidateKeywordHaystack,
         });
         if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
@@ -268,18 +259,18 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
         setUnfilteredResults(result.results);
         setBaseStats(result.baseStats);
       } else {
-        // Vacancy or Company search with optional CMA
+        // Vacancy or Company search with optional Vacature scraper
         let localResults: SearchResult[] = [];
         let localStats: BaseStats = {
           total: 0, noUsableCoords: 0, fromVacancy: 0, fromCompany: 0, fromLocation: 0,
           withoutVacancyCoords: 0, withoutCompanyLink: 0, withoutCompanyMainCoords: 0,
           withoutAlternativeLocations: 0, withoutAlternativeLocationCoords: 0,
-          cmaTotal: 0, cmaMatched: 0,
+          vacatureScraperTotal: 0, vacatureScraperMatched: 0,
         };
 
         if (searchSources.local) {
           if (searchMode === "company") {
-            const data = await fetchCompanyData(base, usePat, geo, maxDist, schema, structuralFieldIds);
+            const data = await fetchCompanyData(base, schema);
             const result = processSimpleRecords({
               mode: "company",
               records: data.records,
@@ -295,7 +286,7 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
             localResults = result.results;
             localStats = result.baseStats;
           } else {
-            const data = await fetchVacancyData(base, usePat, geo, maxDist, schema, structuralFieldIds);
+            const data = await fetchVacancyData(base, usePat, schema);
             const result = processVacancyRecords({
               records: data.records,
               geo,
@@ -314,24 +305,22 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
           }
         }
 
-        // CMA search (vacancy mode only)
-        let cmaResults: SearchResult[] = [];
-        let cmaTotal = 0;
-        if (searchSources.cma && usePat && searchMode === "vacancy") {
-          const vacancyTable = base.getTableByIdIfExists(schema.vacancy.tableId);
-          const cmaNameToId = vacancyTable ? getFilterFieldNameMap(vacancyTable, structuralFieldIds) : new Map<string, string>();
-          const cmaRecords = await fetchCmaData(usePat, geo, maxDist);
-          const cmaResult = processCmaRecords(cmaRecords, geo, maxDist, cmaNameToId);
-          cmaResults = cmaResult.results;
-          cmaTotal = cmaResult.total;
+        // Vacature scraper search (vacancy mode only)
+        let vacatureScraperResults: SearchResult[] = [];
+        let vacatureScraperTotal = 0;
+        if (searchSources.vacatureScraper && usePat && searchMode === "vacancy") {
+          const scraperRecords = await fetchVacatureScraperData(usePat, geo, maxDist);
+          const scraperResult = processVacatureScraperRecords(scraperRecords, geo, maxDist, new Map());
+          vacatureScraperResults = scraperResult.results;
+          vacatureScraperTotal = scraperResult.total;
         }
 
-        const allResults = [...localResults, ...cmaResults].sort((a, b) => a.distance - b.distance);
+        const allResults = [...localResults, ...vacatureScraperResults].sort((a, b) => a.distance - b.distance);
         setUnfilteredResults(allResults);
         setBaseStats({
           ...localStats,
-          cmaTotal,
-          cmaMatched: cmaResults.length,
+          vacatureScraperTotal,
+          vacatureScraperMatched: vacatureScraperResults.length,
         });
       }
     } catch (err) {
@@ -339,7 +328,7 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
     } finally {
       setIsSearching(false);
     }
-  }, [locationQuery, radius, searchMode, searchSources, cmaPat, base, unloadCachedQuery, schema, structuralFieldIds, vacancyExclude, companyExclude]);
+  }, [locationQuery, radius, searchMode, searchSources, vacatureScraperPat, base, unloadCachedQuery, schema, vacancyExclude, companyExclude]);
 
   const handleExpand = useCallback((id: string): void => {
     const record = cachedQueryRef.current?.getRecordByIdIfExists(id);
@@ -348,10 +337,10 @@ export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
       return;
     }
     const tableId = searchMode === "company"
-      ? schema?.company.tableId
+      ? schema.company.tableId
       : searchMode === "candidate"
-        ? schema?.candidate.tableId
-        : schema?.vacancy.tableId;
+        ? schema.candidate.tableId
+        : schema.vacancy.tableId;
     if (tableId) window.open(`https://airtable.com/${base.id}/${tableId}/${id}`, "_blank");
   }, [base, searchMode, schema]);
 

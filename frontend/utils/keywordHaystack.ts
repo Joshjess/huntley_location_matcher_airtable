@@ -45,9 +45,9 @@ export function buildCandidateKeywordHaystack(
 }
 
 /**
- * Build keyword haystack from CMA record fields (coordinates excluded).
+ * Build keyword haystack from Vacature scraper record fields (coordinates excluded).
  */
-export function buildCmaKeywordHaystack(
+export function buildVacatureScraperKeywordHaystack(
   accessor: RecordAccessor,
 ): string {
   const exclude = new Set(["Latitude", "Longitude"]);

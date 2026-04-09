@@ -31,15 +31,16 @@ export function ResultCard({ result, onExpand }: ResultCardProps): React.ReactEl
       : { icon: <BuildingsIcon size={14} weight="fill" />, label: "Bedrijf" };
 
   const badges: { key: string; label: string; className?: string }[] = [];
-  if (result.source === "cma") {
-    badges.push({ key: "source-cma", label: "CMA", className: "tag--cma" });
+  if (result.source === "vacatureScraper") {
+    badges.push({ key: "source-vacature-scraper", label: "Vacature scraper", className: "tag--vacature-scraper" });
   }
 
 
   cardTitle = result.name;
 
   if (isCandidate) {
-    cardTitle = `${result.name} - ${result.filterValues[FUNCTION_TITLE_FIELD_ID]}`;
+    const funcTitle = result.filterValues[FUNCTION_TITLE_FIELD_ID];
+    cardTitle = funcTitle ? `${result.name} - ${funcTitle}` : result.name;
   }
   if (isVacancy) {
     cardTitle = result.name;

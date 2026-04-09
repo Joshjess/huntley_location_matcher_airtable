@@ -17,7 +17,7 @@ import {
   buildVacancyKeywordHaystack,
   buildCompanyKeywordHaystack,
   buildCandidateKeywordHaystack,
-  buildCmaKeywordHaystack,
+  buildVacatureScraperKeywordHaystack,
 } from "./keywordHaystack";
 
 export interface BaseStats {
@@ -31,8 +31,8 @@ export interface BaseStats {
   readonly withoutCompanyMainCoords: number;
   readonly withoutAlternativeLocations: number;
   readonly withoutAlternativeLocationCoords: number;
-  readonly cmaTotal: number;
-  readonly cmaMatched: number;
+  readonly vacatureScraperTotal: number;
+  readonly vacatureScraperMatched: number;
 }
 
 export function emptyBaseStats(): BaseStats {
@@ -40,7 +40,7 @@ export function emptyBaseStats(): BaseStats {
     total: 0, noUsableCoords: 0, fromVacancy: 0, fromCompany: 0, fromLocation: 0,
     withoutVacancyCoords: 0, withoutCompanyLink: 0, withoutCompanyMainCoords: 0,
     withoutAlternativeLocations: 0, withoutAlternativeLocationCoords: 0,
-    cmaTotal: 0, cmaMatched: 0,
+    vacatureScraperTotal: 0, vacatureScraperMatched: 0,
   };
 }
 
@@ -50,7 +50,7 @@ interface ProcessVacancyInput {
   readonly maxDist: number;
   readonly companyMap: ReadonlyMap<string, RecordAccessor>;
   readonly locationMap: ReadonlyMap<string, RecordAccessor>;
-  readonly filterFieldIds: { fieldId: string }[];
+  readonly filterFieldIds: readonly { fieldId: string }[];
   readonly schema: ResolvedSchema;
   readonly vacancyExcludeFieldIds: Set<string>;
   readonly companyExcludeFieldIds: Set<string>;
@@ -143,7 +143,7 @@ interface ProcessSimpleInput {
   readonly maxDist: number;
   readonly latFieldId: string;
   readonly lonFieldId: string;
-  readonly filterFieldIds: { fieldId: string }[];
+  readonly filterFieldIds: readonly { fieldId: string }[];
   readonly buildHaystack: (accessor: RecordAccessor) => string;
 }
 
@@ -197,11 +197,11 @@ export function processSimpleRecords(input: ProcessSimpleInput): {
   };
 }
 
-export function processCmaRecords(
+export function processVacatureScraperRecords(
   records: RecordAccessor[],
   geo: GeocodedLocation,
   maxDist: number,
-  cmaNameToLocalId: ReadonlyMap<string, string>,
+  vacatureScraperNameToLocalId: ReadonlyMap<string, string>,
 ): { results: VacancySearchResult[]; total: number } {
   const results: VacancySearchResult[] = [];
 
@@ -213,10 +213,10 @@ export function processCmaRecords(
     const distance = haversineKm(geo.lat, geo.lon, lat, lon);
     if (distance > maxDist) continue;
 
-    // Map CMA field values to local filter field IDs by matching field names
+    // Map Vacature scraper field values to local filter field IDs by matching field names
     const filterValues: Record<string, FilterValue> = {};
     for (const fieldName of rec.fieldIds) {
-      const localId = cmaNameToLocalId.get(fieldName);
+      const localId = vacatureScraperNameToLocalId.get(fieldName);
       if (localId) {
         const val = rec.getString(fieldName);
         if (val) filterValues[localId] = val;
@@ -225,13 +225,13 @@ export function processCmaRecords(
 
     results.push({
       mode: "vacancy",
-      source: "cma",
+      source: "vacatureScraper",
       id: rec.id,
       name: rec.name || "Naamloze vacature",
       distance,
       coordSource: "vacancy",
       filterValues,
-      keywordHaystack: buildCmaKeywordHaystack(rec),
+      keywordHaystack: buildVacatureScraperKeywordHaystack(rec),
       createdAt: rec.createdAt,
     });
   }

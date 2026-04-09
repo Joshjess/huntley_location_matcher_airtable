@@ -2,13 +2,13 @@ export type SearchMode = "vacancy" | "company" | "candidate";
 
 export type CoordSource = "vacancy" | "company" | "location";
 
-export type SearchSource = "local" | "cma";
+export type SearchSource = "local" | "vacatureScraper";
 
 export type FilterValue = string | string[] | null;
 
 export interface SearchSourceConfig {
   local: boolean;
-  cma: boolean;
+  vacatureScraper: boolean;
 }
 
 export interface GeocodedLocation {
@@ -67,8 +67,8 @@ export interface SearchStats {
   readonly withoutAlternativeLocations: number;
   readonly withoutAlternativeLocationCoords: number;
   readonly filteredOut: number;
-  readonly cmaTotal?: number;
-  readonly cmaMatched?: number;
+  readonly vacatureScraperTotal?: number;
+  readonly vacatureScraperMatched?: number;
 }
 
 export interface RadiusOption {

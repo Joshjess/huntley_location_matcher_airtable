@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useGlobalConfig } from "@airtable/blocks/ui";
 
-const PAT_CONFIG_KEY = "cmaAirtablePat";
+const PAT_CONFIG_KEY = "vacatureScraperAirtablePat";
 
 interface UsePatSettingsReturn {
   pat: string;

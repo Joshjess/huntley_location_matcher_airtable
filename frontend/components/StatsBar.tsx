@@ -37,11 +37,11 @@ export function StatsBar({ stats, searchMode }: StatsBarProps): React.ReactEleme
             colorClass: "stat-value--muted",
             icon: <QuestionIcon size={12} weight="bold" />,
           },
-          ...(stats.cmaMatched != null && stats.cmaMatched > 0
+          ...(stats.vacatureScraperMatched != null && stats.vacatureScraperMatched > 0
             ? [
                 {
-                  label: "CMA",
-                  value: stats.cmaMatched,
+                  label: "Vacature scraper",
+                  value: stats.vacatureScraperMatched,
                   colorClass: "stat-value--purple",
                   icon: <DatabaseIcon size={12} weight="fill" /> as React.ReactNode,
                 },

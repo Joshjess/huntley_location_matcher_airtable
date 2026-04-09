@@ -1,5 +1,5 @@
-export const CMA_BASE_ID = "app0N8iiJGETseFUe";
-export const CMA_VACANCIES_TABLE_ID = "tblX7XuOFzBlomag2";
+export const VACATURE_SCRAPER_BASE_ID = "app0N8iiJGETseFUe";
+export const VACATURE_SCRAPER_VACANCIES_TABLE_ID = "tblX7XuOFzBlomag2";
 const API_BASE = "https://api.airtable.com/v0";
 
 // Rate limit: max 4 req/sec (Airtable limit is 5)
@@ -26,7 +26,7 @@ interface ListResponse {
   offset?: string;
 }
 
-export interface CmaVacancy {
+export interface VacatureScraperVacancy {
   id: string;
   name: string;
   lat: number;
@@ -71,7 +71,7 @@ export interface BoundingBox {
 }
 
 /**
- * Fetch CMA vacancies that have coordinates, optionally within a bounding box.
+ * Fetch Vacature scraper vacancies that have coordinates, optionally within a bounding box.
  */
 // ---------------------------------------------------------------------------
 // Generic REST record fetching with filterByFormula
@@ -141,14 +141,52 @@ export async function fetchRecordsByFormula(
 }
 
 // ---------------------------------------------------------------------------
-// CMA-specific fetch (uses field names, not IDs)
+// Link mapping fetch — gets linked record IDs for a single field via REST
+// Used because the SDK can't see certain linked record fields on Bedrijven
 // ---------------------------------------------------------------------------
 
-export async function fetchCmaVacancies(
+/**
+ * Fetch a Map<recordId, linkedRecordIds[]> for a single link field on a table.
+ * Paginates automatically. Only fetches the one field.
+ */
+export async function fetchLinkMapping(
+  pat: string,
+  baseId: string,
+  tableId: string,
+  linkFieldId: string,
+): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  let offset: string | undefined;
+
+  do {
+    const offsetParam = offset ? `&offset=${encodeURIComponent(offset)}` : "";
+    const path = `/${baseId}/${tableId}?returnFieldsByFieldId=true&fields%5B%5D=${linkFieldId}${offsetParam}`;
+
+    const res = await airtableFetch(pat, path);
+    const data: ListResponse = await res.json();
+
+    for (const rec of data.records) {
+      const val = rec.fields[linkFieldId];
+      if (Array.isArray(val) && val.length > 0) {
+        map.set(rec.id, val as string[]);
+      }
+    }
+
+    offset = data.offset;
+  } while (offset);
+
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Vacature scraper-specific fetch (uses field names, not IDs)
+// ---------------------------------------------------------------------------
+
+export async function fetchVacatureScraperVacancies(
   pat: string,
   boundingBox?: BoundingBox,
-): Promise<CmaVacancy[]> {
-  const results: CmaVacancy[] = [];
+): Promise<VacatureScraperVacancy[]> {
+  const results: VacatureScraperVacancy[] = [];
   let offset: string | undefined;
 
   let formula = "AND({Latitude}!=BLANK(),{Longitude}!=BLANK())";
@@ -159,7 +197,7 @@ export async function fetchCmaVacancies(
 
   do {
     const offsetParam = offset ? `&offset=${encodeURIComponent(offset)}` : "";
-    const path = `/${CMA_BASE_ID}/${CMA_VACANCIES_TABLE_ID}?filterByFormula=${encodedFormula}${offsetParam}`;
+    const path = `/${VACATURE_SCRAPER_BASE_ID}/${VACATURE_SCRAPER_VACANCIES_TABLE_ID}?filterByFormula=${encodedFormula}${offsetParam}`;
 
     const res = await airtableFetch(pat, path);
     const data: ListResponse = await res.json();

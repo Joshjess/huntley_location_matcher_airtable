@@ -1,96 +1,30 @@
-import { Base, Table, TableOrViewQueryResult } from "@airtable/blocks/models";
+import { Base, TableOrViewQueryResult } from "@airtable/blocks/models";
 import { GeocodedLocation } from "../types";
 import { computeBoundingBox } from "./geo";
-import { ResolvedSchema, getTable, getQueryFields, discoverFilterFields } from "./config";
-import {
-  fetchRecordsByFormula,
-  buildBboxFormula,
-  buildNoCoordsFormula,
-  fetchCmaVacancies,
-} from "./airtableRest";
-import { RecordAccessor, fromSdkRecord, fromRestRecord, fromCmaRecord } from "./recordAccessor";
+import { SCHEMA, ResolvedSchema, getTable, getFilterTemplates } from "./config";
+import { fetchLinkMapping, fetchVacatureScraperVacancies } from "./airtableRest";
+import { RecordAccessor, fromSdkRecord, withLinkOverrides, fromVacatureScraperRecord } from "./recordAccessor";
 
 export interface FetchResult {
   readonly records: RecordAccessor[];
   readonly companyMap: ReadonlyMap<string, RecordAccessor>;
   readonly locationMap: ReadonlyMap<string, RecordAccessor>;
-  readonly filterFieldIds: { fieldId: string }[];
+  readonly filterFieldIds: readonly { fieldId: string }[];
   readonly totalFetched: number;
-  /** SDK queries that need unloading (empty for REST) */
   readonly queriesToUnload: (TableOrViewQueryResult | null)[];
-  /** The main query to cache for record expansion (SDK only) */
   readonly cacheableQuery: TableOrViewQueryResult | null;
 }
 
 // ---------------------------------------------------------------------------
-// Vacancy data fetching
+// Vacancy data fetching (SDK records + REST link mappings)
+// The SDK can't see linked record fields on Bedrijven, so we fetch those
+// link mappings via REST and inject them into the company accessors.
 // ---------------------------------------------------------------------------
 
 export async function fetchVacancyData(
   base: Base,
   pat: string | null,
-  geo: GeocodedLocation,
-  maxDist: number,
   schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
-): Promise<FetchResult> {
-  if (pat) {
-    return fetchVacancyDataRest(base, pat, geo, maxDist, schema, structuralFieldIds);
-  }
-  return fetchVacancyDataSdk(base, geo, maxDist, schema, structuralFieldIds);
-}
-
-async function fetchVacancyDataRest(
-  base: Base,
-  pat: string,
-  geo: GeocodedLocation,
-  maxDist: number,
-  schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
-): Promise<FetchResult> {
-  const bbox = computeBoundingBox(geo.lat, geo.lon, maxDist);
-  const baseId = base.id;
-  const vacancyTable = getTable(base, schema.vacancy.tableId);
-  const primaryFieldId = vacancyTable?.primaryField?.id;
-
-  const [vacInBbox, vacNoCoords, companiesInBbox, locationsInBbox] = await Promise.all([
-    fetchRecordsByFormula(pat, baseId, schema.vacancy.tableId,
-      buildBboxFormula(schema.vacancy.latFieldId, schema.vacancy.lonFieldId, bbox)),
-    fetchRecordsByFormula(pat, baseId, schema.vacancy.tableId,
-      buildNoCoordsFormula(schema.vacancy.latFieldId, schema.vacancy.lonFieldId)),
-    fetchRecordsByFormula(pat, baseId, schema.company.tableId,
-      buildBboxFormula(schema.company.latFieldId, schema.company.lonFieldId, bbox)),
-    fetchRecordsByFormula(pat, baseId, schema.location.tableId,
-      buildBboxFormula(schema.location.latFieldId, schema.location.lonFieldId, bbox)),
-  ]);
-
-  const companyMap = new Map<string, RecordAccessor>();
-  for (const rec of companiesInBbox) companyMap.set(rec.id, fromRestRecord(rec));
-  const locationMap = new Map<string, RecordAccessor>();
-  for (const rec of locationsInBbox) locationMap.set(rec.id, fromRestRecord(rec));
-
-  const allVacancies = [...vacInBbox, ...vacNoCoords];
-  const records = allVacancies.map((rec) => fromRestRecord(rec, primaryFieldId));
-
-  const filterFieldIds = vacancyTable ? discoverFilterFields(vacancyTable, structuralFieldIds) : [];
-
-  return {
-    records,
-    companyMap,
-    locationMap,
-    filterFieldIds,
-    totalFetched: allVacancies.length,
-    queriesToUnload: [],
-    cacheableQuery: null,
-  };
-}
-
-async function fetchVacancyDataSdk(
-  base: Base,
-  _geo: GeocodedLocation,
-  _maxDist: number,
-  schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
 ): Promise<FetchResult> {
   const vacancyTable = getTable(base, schema.vacancy.tableId);
   if (!vacancyTable) throw new Error("Vacatures tabel niet gevonden.");
@@ -98,26 +32,30 @@ async function fetchVacancyDataSdk(
   const companyTable = getTable(base, schema.company.tableId);
   const locationTable = getTable(base, schema.location.tableId);
 
-  const [vacancyQuery, companyQuery, locationQuery] = await Promise.all([
+  // SDK: fetch all records; REST: fetch link mappings the SDK can't see
+  const [vacancyQuery, companyQuery, locationQuery, companyLocationLinks] = await Promise.all([
     vacancyTable.selectRecordsAsync({ fields: vacancyTable.fields }),
     companyTable
       ? companyTable.selectRecordsAsync({ fields: companyTable.fields })
       : Promise.resolve(null),
     locationTable
-      ? locationTable.selectRecordsAsync({
-          fields: getQueryFields(locationTable, [
-            schema.location.latFieldId,
-            schema.location.lonFieldId,
-          ]),
-        })
+      ? locationTable.selectRecordsAsync({ fields: locationTable.fields })
       : Promise.resolve(null),
+    pat
+      ? fetchLinkMapping(pat, base.id, schema.company.tableId, schema.company.locationLinkFieldId)
+      : Promise.resolve(new Map<string, string[]>()),
   ]);
 
   try {
     const companyMap = new Map<string, RecordAccessor>();
     if (companyTable) {
       for (const rec of companyQuery?.records ?? []) {
-        companyMap.set(rec.id, fromSdkRecord(rec, companyTable));
+        const accessor = fromSdkRecord(rec, companyTable);
+        const links = companyLocationLinks.get(rec.id);
+        companyMap.set(
+          rec.id,
+          links ? withLinkOverrides(accessor, { [schema.company.locationLinkFieldId]: links }) : accessor,
+        );
       }
     }
 
@@ -129,13 +67,12 @@ async function fetchVacancyDataSdk(
     }
 
     const records = vacancyQuery.records.map((rec) => fromSdkRecord(rec, vacancyTable));
-    const filterFieldIds = discoverFilterFields(vacancyTable, structuralFieldIds);
 
     return {
       records,
       companyMap,
       locationMap,
-      filterFieldIds,
+      filterFieldIds: getFilterTemplates("vacancy"),
       totalFetched: vacancyQuery.records.length,
       queriesToUnload: [companyQuery, locationQuery],
       cacheableQuery: vacancyQuery,
@@ -149,56 +86,13 @@ async function fetchVacancyDataSdk(
 }
 
 // ---------------------------------------------------------------------------
-// Company data fetching
+// Company data fetching (SDK — current ATS base)
 // ---------------------------------------------------------------------------
 
 export async function fetchCompanyData(
   base: Base,
-  pat: string | null,
-  geo: GeocodedLocation,
-  maxDist: number,
   schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
 ): Promise<FetchResult> {
-  if (pat) {
-    return fetchCompanyDataRest(base, pat, geo, maxDist, schema, structuralFieldIds);
-  }
-  return fetchCompanyDataSdk(base, schema, structuralFieldIds);
-}
-
-async function fetchCompanyDataRest(
-  base: Base,
-  pat: string,
-  geo: GeocodedLocation,
-  maxDist: number,
-  schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
-): Promise<FetchResult> {
-  const bbox = computeBoundingBox(geo.lat, geo.lon, maxDist);
-  const baseId = base.id;
-  const companyTable = getTable(base, schema.company.tableId);
-  const primaryFieldId = companyTable?.primaryField?.id;
-
-  const companiesInBbox = await fetchRecordsByFormula(
-    pat, baseId, schema.company.tableId,
-    buildBboxFormula(schema.company.latFieldId, schema.company.lonFieldId, bbox),
-  );
-
-  const records = companiesInBbox.map((rec) => fromRestRecord(rec, primaryFieldId));
-  const filterFieldIds = companyTable ? discoverFilterFields(companyTable, structuralFieldIds) : [];
-
-  return {
-    records,
-    companyMap: new Map(),
-    locationMap: new Map(),
-    filterFieldIds,
-    totalFetched: companiesInBbox.length,
-    queriesToUnload: [],
-    cacheableQuery: null,
-  };
-}
-
-async function fetchCompanyDataSdk(base: Base, schema: ResolvedSchema, structuralFieldIds: Set<string>): Promise<FetchResult> {
   const companyTable = getTable(base, schema.company.tableId);
   if (!companyTable) throw new Error("Bedrijven tabel niet gevonden.");
 
@@ -206,13 +100,12 @@ async function fetchCompanyDataSdk(base: Base, schema: ResolvedSchema, structura
 
   try {
     const records = companyQuery.records.map((rec) => fromSdkRecord(rec, companyTable));
-    const filterFieldIds = discoverFilterFields(companyTable, structuralFieldIds);
 
     return {
       records,
       companyMap: new Map(),
       locationMap: new Map(),
-      filterFieldIds,
+      filterFieldIds: getFilterTemplates("company"),
       totalFetched: companyQuery.records.length,
       queriesToUnload: [],
       cacheableQuery: companyQuery,
@@ -224,56 +117,13 @@ async function fetchCompanyDataSdk(base: Base, schema: ResolvedSchema, structura
 }
 
 // ---------------------------------------------------------------------------
-// Candidate data fetching
+// Candidate data fetching (SDK — current ATS base)
 // ---------------------------------------------------------------------------
 
 export async function fetchCandidateData(
   base: Base,
-  pat: string | null,
-  geo: GeocodedLocation,
-  maxDist: number,
   schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
 ): Promise<FetchResult> {
-  if (pat) {
-    return fetchCandidateDataRest(base, pat, geo, maxDist, schema, structuralFieldIds);
-  }
-  return fetchCandidateDataSdk(base, schema, structuralFieldIds);
-}
-
-async function fetchCandidateDataRest(
-  base: Base,
-  pat: string,
-  geo: GeocodedLocation,
-  maxDist: number,
-  schema: ResolvedSchema,
-  structuralFieldIds: Set<string>,
-): Promise<FetchResult> {
-  const bbox = computeBoundingBox(geo.lat, geo.lon, maxDist);
-  const baseId = base.id;
-  const candidateTable = getTable(base, schema.candidate.tableId);
-  const primaryFieldId = candidateTable?.primaryField?.id;
-
-  const candidatesInBbox = await fetchRecordsByFormula(
-    pat, baseId, schema.candidate.tableId,
-    buildBboxFormula(schema.candidate.latFieldId, schema.candidate.lonFieldId, bbox),
-  );
-
-  const records = candidatesInBbox.map((rec) => fromRestRecord(rec, primaryFieldId));
-  const filterFieldIds = candidateTable ? discoverFilterFields(candidateTable, structuralFieldIds) : [];
-
-  return {
-    records,
-    companyMap: new Map(),
-    locationMap: new Map(),
-    filterFieldIds,
-    totalFetched: candidatesInBbox.length,
-    queriesToUnload: [],
-    cacheableQuery: null,
-  };
-}
-
-async function fetchCandidateDataSdk(base: Base, schema: ResolvedSchema, structuralFieldIds: Set<string>): Promise<FetchResult> {
   const candidateTable = getTable(base, schema.candidate.tableId);
   if (!candidateTable) throw new Error("Kandidaten tabel niet gevonden.");
 
@@ -283,13 +133,12 @@ async function fetchCandidateDataSdk(base: Base, schema: ResolvedSchema, structu
 
   try {
     const records = candidateQuery.records.map((rec) => fromSdkRecord(rec, candidateTable));
-    const filterFieldIds = discoverFilterFields(candidateTable, structuralFieldIds);
 
     return {
       records,
       companyMap: new Map(),
       locationMap: new Map(),
-      filterFieldIds,
+      filterFieldIds: getFilterTemplates("candidate"),
       totalFetched: candidateQuery.records.length,
       queriesToUnload: [],
       cacheableQuery: candidateQuery,
@@ -301,15 +150,15 @@ async function fetchCandidateDataSdk(base: Base, schema: ResolvedSchema, structu
 }
 
 // ---------------------------------------------------------------------------
-// CMA data fetching
+// Vacature scraper data fetching (REST API — external base)
 // ---------------------------------------------------------------------------
 
-export async function fetchCmaData(
+export async function fetchVacatureScraperData(
   pat: string,
   geo: GeocodedLocation,
   maxDist: number,
 ): Promise<RecordAccessor[]> {
   const boundingBox = computeBoundingBox(geo.lat, geo.lon, maxDist);
-  const cmaVacancies = await fetchCmaVacancies(pat, boundingBox);
-  return cmaVacancies.map((vac) => fromCmaRecord(vac));
+  const vacancies = await fetchVacatureScraperVacancies(pat, boundingBox);
+  return vacancies.map((vac) => fromVacatureScraperRecord(vac));
 }

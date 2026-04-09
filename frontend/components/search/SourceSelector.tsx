@@ -20,8 +20,8 @@ export function SourceSelector(): React.ReactElement | null {
       <label className="source-checkbox">
         <input
           type="checkbox"
-          checked={searchSources.cma}
-          onChange={(e) => handleSearchSourceChange("cma", e.target.checked)}
+          checked={searchSources.vacatureScraper}
+          onChange={(e) => handleSearchSourceChange("vacatureScraper", e.target.checked)}
           disabled={!hasPat}
         />
         <span>Vacature scraper Airtable</span>
