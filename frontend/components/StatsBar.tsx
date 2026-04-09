@@ -1,5 +1,5 @@
 import React from "react";
-import { MapPin, Buildings, PushPin, Question, FunnelSimple } from "@phosphor-icons/react";
+import { MapPinIcon, BuildingsIcon, PushPinIcon, QuestionIcon, FunnelSimpleIcon, DatabaseIcon } from "@phosphor-icons/react";
 import { StatsBarProps } from "../types";
 
 export function StatsBar({ stats, searchMode }: StatsBarProps): React.ReactElement {
@@ -17,33 +17,43 @@ export function StatsBar({ stats, searchMode }: StatsBarProps): React.ReactEleme
             label: "Vacature",
             value: stats.fromVacancy,
             colorClass: "stat-value--green",
-            icon: <MapPin size={12} weight="fill" />,
+            icon: <MapPinIcon size={12} weight="fill" />,
           },
           {
             label: "Hoofdlocatie",
             value: stats.fromCompany,
             colorClass: "stat-value--blue",
-            icon: <Buildings size={12} weight="fill" />,
+            icon: <BuildingsIcon size={12} weight="fill" />,
           },
           {
             label: "Alt. locatie",
             value: stats.fromLocation,
             colorClass: "stat-value--purple",
-            icon: <PushPin size={12} weight="fill" />,
+            icon: <PushPinIcon size={12} weight="fill" />,
           },
           {
             label: "Geen coord.",
             value: stats.noUsableCoords,
             colorClass: "stat-value--muted",
-            icon: <Question size={12} weight="bold" />,
+            icon: <QuestionIcon size={12} weight="bold" />,
           },
+          ...(stats.cmaMatched != null && stats.cmaMatched > 0
+            ? [
+                {
+                  label: "CMA",
+                  value: stats.cmaMatched,
+                  colorClass: "stat-value--purple",
+                  icon: <DatabaseIcon size={12} weight="fill" /> as React.ReactNode,
+                },
+              ]
+            : []),
           ...(stats.filteredOut > 0
             ? [
                 {
                   label: "Uitgefilterd",
                   value: stats.filteredOut,
                   colorClass: "stat-value--muted",
-                  icon: <FunnelSimple size={12} weight="bold" /> as React.ReactNode,
+                  icon: <FunnelSimpleIcon size={12} weight="bold" /> as React.ReactNode,
                 },
               ]
             : []),
@@ -52,10 +62,10 @@ export function StatsBar({ stats, searchMode }: StatsBarProps): React.ReactEleme
           { label: "Totaal", value: stats.total, colorClass: "stat-value--default" },
           { label: "Gevonden", value: stats.matched, colorClass: "stat-value--default" },
           {
-            label: "Geen coord.",
+            label: "Geen locatie",
             value: stats.noUsableCoords,
             colorClass: "stat-value--muted",
-            icon: <Question size={12} weight="bold" />,
+            icon: <QuestionIcon size={12} weight="bold" />,
           },
           ...(stats.filteredOut > 0
             ? [
@@ -63,7 +73,7 @@ export function StatsBar({ stats, searchMode }: StatsBarProps): React.ReactEleme
                   label: "Uitgefilterd",
                   value: stats.filteredOut,
                   colorClass: "stat-value--muted",
-                  icon: <FunnelSimple size={12} weight="bold" /> as React.ReactNode,
+                  icon: <FunnelSimpleIcon size={12} weight="bold" /> as React.ReactNode,
                 },
               ]
             : []),

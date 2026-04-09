@@ -30,6 +30,20 @@ export function haversineKm(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+import { BoundingBox } from "./airtableRest";
+
+/** Compute a lat/lon bounding box for a centre point + radius in km. */
+export function computeBoundingBox(lat: number, lon: number, radiusKm: number): BoundingBox {
+  const latDelta = radiusKm / 111;
+  const lonDelta = radiusKm / (111 * Math.cos((lat * Math.PI) / 180));
+  return {
+    minLat: lat - latDelta,
+    maxLat: lat + latDelta,
+    minLon: lon - lonDelta,
+    maxLon: lon + lonDelta,
+  };
+}
+
 export async function geocodeLocation(
   query: string,
 ): Promise<GeocodedLocation | null> {
@@ -47,3 +61,4 @@ export async function geocodeLocation(
     displayName,
   };
 }
+

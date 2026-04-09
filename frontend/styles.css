@@ -117,6 +117,18 @@ body {
 
 .page-header {
   margin-bottom: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.page-header__right {
+  margin-left: auto;
+}
+
+.page-subtitle {
+  width: 100%;
 }
 
 .page-title {
@@ -150,9 +162,25 @@ body {
 
 .search-bar {
   display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.search-bar__row {
+  display: flex;
   align-items: flex-end;
   gap: 0.75rem;
-  margin-bottom: 1.5rem;
+  width: 100%;
+}
+
+.search-bar__row--keywords {
+  align-items: stretch;
+}
+
+.field-group--keywords {
+  flex: 1;
+  min-width: 0;
 }
 
 .field-group {
@@ -633,10 +661,37 @@ body {
   margin-bottom: 0.375rem;
 }
 
+.date-range {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.date-range__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.date-range__label {
+  font-size: 0.6875rem;
+  color: var(--color-text-tertiary);
+}
+
+.date-range__input {
+  max-width: 160px;
+  font-size: 0.8125rem;
+}
+
 .filter-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
+}
+
+.filter-chips__empty {
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  font-style: italic;
 }
 
 .filter-chip {
@@ -693,6 +748,17 @@ body {
    Result Card Tags
    ═══════════════════════════════════════════════════════════════════════════ */
 
+.spinner--small {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-width: 2px;
+  display: inline-block;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Result Card Tags
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .result-card__tags {
   display: flex;
   flex-wrap: wrap;
@@ -711,4 +777,59 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   white-space: nowrap;
+}
+
+.tag--cma {
+  background-color: rgba(147, 51, 234, 0.1);
+  border-color: rgba(147, 51, 234, 0.3);
+  color: #7c3aed;
+}
+
+/* Settings Panel */
+.settings-panel {
+  margin-bottom: 0.75rem;
+}
+
+.settings-panel__title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem 0;
+  color: var(--color-text-primary);
+}
+
+/* Source Checkboxes */
+.source-checkboxes {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.375rem 0;
+  font-size: 0.8125rem;
+}
+
+.source-checkboxes__label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.source-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.source-checkbox input[type="checkbox"] {
+  accent-color: var(--color-primary);
+}
+
+.source-checkbox input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.source-checkbox__hint {
+  font-size: 0.6875rem;
+  color: var(--color-text-tertiary);
+  font-style: italic;
 }

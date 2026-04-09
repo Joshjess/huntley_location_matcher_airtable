@@ -1,6 +1,15 @@
-export type SearchMode = "vacancy" | "company";
+export type SearchMode = "vacancy" | "company" | "candidate";
 
 export type CoordSource = "vacancy" | "company" | "location";
+
+export type SearchSource = "local" | "cma";
+
+export type FilterValue = string | string[] | null;
+
+export interface SearchSourceConfig {
+  local: boolean;
+  cma: boolean;
+}
 
 export interface GeocodedLocation {
   readonly lat: number;
@@ -10,22 +19,40 @@ export interface GeocodedLocation {
 
 export interface VacancySearchResult {
   readonly mode: "vacancy";
+  readonly source: SearchSource;
   readonly id: string;
   readonly name: string;
   readonly distance: number;
   readonly coordSource: CoordSource;
-  readonly filterValues: Readonly<Record<string, string | null>>;
+  readonly filterValues: Readonly<Record<string, FilterValue>>;
+  /** Lowercased concatenation of vacancy + linked company searchable fields */
+  readonly keywordHaystack: string;
+  readonly createdAt: string | null;
 }
 
 export interface CompanySearchResult {
   readonly mode: "company";
+  readonly source: SearchSource;
   readonly id: string;
   readonly name: string;
   readonly distance: number;
-  readonly filterValues: Readonly<Record<string, string | null>>;
+  readonly filterValues: Readonly<Record<string, FilterValue>>;
+  readonly keywordHaystack: string;
+  readonly createdAt: string | null;
 }
 
-export type SearchResult = VacancySearchResult | CompanySearchResult;
+export interface CandidateSearchResult {
+  readonly mode: "candidate";
+  readonly source: SearchSource;
+  readonly id: string;
+  readonly name: string;
+  readonly distance: number;
+  readonly filterValues: Readonly<Record<string, FilterValue>>;
+  readonly keywordHaystack: string;
+  readonly createdAt: string | null;
+}
+
+export type SearchResult = VacancySearchResult | CompanySearchResult | CandidateSearchResult;
 
 export interface SearchStats {
   readonly total: number;
@@ -40,6 +67,8 @@ export interface SearchStats {
   readonly withoutAlternativeLocations: number;
   readonly withoutAlternativeLocationCoords: number;
   readonly filteredOut: number;
+  readonly cmaTotal?: number;
+  readonly cmaMatched?: number;
 }
 
 export interface RadiusOption {
@@ -47,10 +76,20 @@ export interface RadiusOption {
   readonly label: string;
 }
 
+export interface FilterTemplate {
+  readonly fieldId: string;
+  readonly label: string;
+}
+
 export interface FilterDefinition {
   readonly fieldId: string;
   readonly label: string;
   readonly options: readonly string[];
+}
+
+export interface DateRange {
+  from: string;
+  to: string;
 }
 
 export interface LinkedRecordCellValue {
@@ -61,19 +100,6 @@ export interface LinkedRecordCellValue {
 export interface ResultCardProps {
   readonly result: SearchResult;
   readonly onExpand: (id: string) => void;
-}
-
-export interface SearchBarProps {
-  readonly searchMode: SearchMode;
-  readonly onSearchModeChange: (mode: SearchMode) => void;
-  readonly locationQuery: string;
-  readonly onLocationQueryChange: (value: string) => void;
-  readonly radius: string;
-  readonly onRadiusChange: (value: string) => void;
-  readonly filters: Readonly<Record<string, string[]>>;
-  readonly onFilterChange: (fieldId: string, values: string[]) => void;
-  readonly onSearch: () => void;
-  readonly isSearching: boolean;
 }
 
 export interface StatsBarProps {

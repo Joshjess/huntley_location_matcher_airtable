@@ -1,15 +1,22 @@
 import React from "react";
-import { SmileySad } from "@phosphor-icons/react";
+import { SmileySadIcon } from "@phosphor-icons/react";
 import { ResultCard } from "./ResultCard";
 import { SearchResultsProps } from "../types";
+
+function getModeLabel(searchMode: string): string {
+  if (searchMode === "company") return "bedrijven";
+  if (searchMode === "candidate") return "kandidaten";
+  return "vacatures";
+}
 
 function getEmptyState(
   total: number,
   radius: string,
   stats: SearchResultsProps["stats"],
-  isCompany: boolean,
+  searchMode: string,
 ): { title: string; description: string } {
-  const label = isCompany ? "bedrijven" : "vacatures";
+  const isCompany = searchMode === "company";
+  const label = getModeLabel(searchMode);
 
   if (total === 0) {
     return {
@@ -76,12 +83,12 @@ export function SearchResults({
   onExpand,
 }: SearchResultsProps): React.ReactElement {
   if (results.length === 0) {
-    const emptyState = getEmptyState(stats.total, radius, stats, searchMode === "company");
+    const emptyState = getEmptyState(stats.total, radius, stats, searchMode);
 
     return (
       <div className="card empty-state">
         <div className="empty-state__icon">
-          <SmileySad size={40} weight="light" />
+          <SmileySadIcon size={40} weight="light" />
         </div>
         <div className="empty-state__title">{emptyState.title}</div>
         <p className="empty-state__description">{emptyState.description}</p>

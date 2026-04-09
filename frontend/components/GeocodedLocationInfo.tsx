@@ -1,5 +1,5 @@
 import React from "react";
-import { MapPin } from "@phosphor-icons/react";
+import { MapPinIcon } from "@phosphor-icons/react";
 import { GeocodedLocationInfoProps } from "../types";
 
 export function GeocodedLocationInfo({
@@ -8,7 +8,7 @@ export function GeocodedLocationInfo({
 }: GeocodedLocationInfoProps): React.ReactElement {
   return (
     <div className="info-bar">
-      <MapPin size={16} weight="fill" className="info-icon" />
+      <MapPinIcon size={16} weight="fill" className="info-icon" />
       <span className="info-text">
         Gezocht rond: <strong>{location.displayName}</strong> (
         {location.lat.toFixed(4)}, {location.lon.toFixed(4)}) — straal {radius} km

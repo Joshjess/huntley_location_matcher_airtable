@@ -1,12 +1,13 @@
 import React from "react";
-import { MapPin, Buildings, PushPin, NavigationArrow } from "@phosphor-icons/react";
-import { ResultCardProps, CoordSource } from "../types";
-import { SCHEMA } from "../utils/config";
+import { MapPinIcon, BuildingsIcon, PushPinIcon, NavigationArrowIcon, UserIcon } from "@phosphor-icons/react";
+import { ResultCardProps, CoordSource, FilterValue } from "../types";
+
+const FUNCTION_TITLE_FIELD_ID = "fldVOPaHYrnC3o4vF";
 
 const SOURCE_CONFIG: Record<CoordSource, { icon: React.ReactNode; label: string }> = {
-  vacancy:  { icon: <MapPin size={14} weight="fill" />,   label: "Vacature" },
-  company:  { icon: <Buildings size={14} weight="fill" />, label: "Bedrijf hoofdlocatie" },
-  location: { icon: <PushPin size={14} weight="fill" />,  label: "Alternatieve locatie" },
+  vacancy:  { icon: <MapPinIcon size={14} weight="fill" />,   label: "Vacature" },
+  company:  { icon: <BuildingsIcon size={14} weight="fill" />, label: "Bedrijf hoofdlocatie" },
+  location: { icon: <PushPinIcon size={14} weight="fill" />,  label: "Alternatieve locatie" },
 };
 
 function getDistanceBadgeClass(distance: number): string {
@@ -15,29 +16,58 @@ function getDistanceBadgeClass(distance: number): string {
   return "distance-badge distance-badge--far";
 }
 
+const MAX_BADGES = 4;
+
+let cardTitle: string | undefined;
+
 export function ResultCard({ result, onExpand }: ResultCardProps): React.ReactElement {
   const isVacancy = result.mode === "vacancy";
-  const source = isVacancy ? SOURCE_CONFIG[result.coordSource] : { icon: <Buildings size={14} weight="fill" />, label: "Bedrijf" };
+  const isCandidate = result.mode === "candidate";
 
-  const badges: { key: string; label: string }[] = [];
+  const source = isVacancy
+    ? SOURCE_CONFIG[result.coordSource]
+    : isCandidate
+      ? { icon: <UserIcon size={14} weight="fill" />, label: "Kandidaat" }
+      : { icon: <BuildingsIcon size={14} weight="fill" />, label: "Bedrijf" };
+
+  const badges: { key: string; label: string; className?: string }[] = [];
+  if (result.source === "cma") {
+    badges.push({ key: "source-cma", label: "CMA", className: "tag--cma" });
+  }
+
+
+  cardTitle = result.name;
+
+  if (isCandidate) {
+    cardTitle = `${result.name} - ${result.filterValues[FUNCTION_TITLE_FIELD_ID]}`;
+  }
   if (isVacancy) {
-    const fv = result.filterValues;
-    const vf = SCHEMA.vacancy.filterFields;
-    if (fv[vf.status]) badges.push({ key: "v-status", label: fv[vf.status]! });
-    if (fv[vf.contractType]) badges.push({ key: "v-contract", label: fv[vf.contractType]! });
-    if (fv[vf.niche]) badges.push({ key: "v-niche", label: fv[vf.niche]! });
-  } else {
-    const fv = result.filterValues;
-    const cf = SCHEMA.company.filterFields;
-    if (fv[cf.sector]) badges.push({ key: "c-sector", label: fv[cf.sector]! });
-    if (fv[cf.provincie]) badges.push({ key: "c-prov", label: fv[cf.provincie]! });
+    cardTitle = result.name;
+  }
+
+  // Show first N non-null filter values as badges
+  for (const [fieldId, value] of Object.entries(result.filterValues)) {
+    if (isCandidate && fieldId === FUNCTION_TITLE_FIELD_ID) {
+      continue;
+    }
+    if (badges.length >= MAX_BADGES) break;
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) {
+        if (badges.length >= MAX_BADGES) break;
+        if (v) badges.push({ key: `${fieldId}-${v}`, label: v });
+      }
+    } else if (value) {
+      badges.push({ key: fieldId, label: value });
+    }
+
   }
 
   return (
     <div className="result-card" onClick={() => onExpand(result.id)}>
       <div className="result-card__body">
         <div className="result-card__title">
-          {result.name || (isVacancy ? "Naamloze vacature" : "Naamloos bedrijf")}
+          {cardTitle || (isVacancy ? "Naamloze vacature" : isCandidate ? "Naamloze kandidaat" : "Naamloos bedrijf")}
         </div>
         <div className="result-card__meta">
           <span className="result-card__meta-icon">{source.icon}</span>
@@ -48,13 +78,13 @@ export function ResultCard({ result, onExpand }: ResultCardProps): React.ReactEl
         {badges.length > 0 && (
           <div className="result-card__tags">
             {badges.map((b) => (
-              <span key={b.key} className="tag">{b.label}</span>
+              <span key={b.key} className={`tag ${b.className ?? ""}`}>{b.label}</span>
             ))}
           </div>
         )}
       </div>
       <span className={getDistanceBadgeClass(result.distance)}>
-        <NavigationArrow size={12} weight="fill" />
+        <NavigationArrowIcon size={12} weight="fill" />
         {result.distance.toFixed(1)} km
       </span>
     </div>

@@ -1,7 +1,6 @@
-import { Field, Record } from "@airtable/blocks/models";
 import { CoordSource } from "../types";
 import { haversineKm } from "./geo";
-import { getCellFloat, getLinkedIds } from "./records";
+import { RecordAccessor } from "./recordAccessor";
 
 interface ResolvedCoordinates {
   readonly lat: number;
@@ -22,36 +21,45 @@ export interface VacancyCoordinateResolution {
   readonly diagnostics: ResolutionDiagnostics;
 }
 
-interface SchemaFields {
-  readonly vacancyLatField: Field | null;
-  readonly vacancyLonField: Field | null;
-  readonly vacancyCompanyLinkField: Field | null;
-  readonly companyLatField: Field | null;
-  readonly companyLonField: Field | null;
-  readonly companyLocationLinkField: Field | null;
-  readonly locationLatField: Field | null;
-  readonly locationLonField: Field | null;
-}
-
 interface ResolveParams {
-  readonly vacancyRecord: Record;
-  readonly companyMap: ReadonlyMap<string, Record>;
-  readonly locationMap: ReadonlyMap<string, Record>;
-  readonly fields: SchemaFields;
+  readonly vacancy: RecordAccessor;
+  readonly companyMap: ReadonlyMap<string, RecordAccessor>;
+  readonly locationMap: ReadonlyMap<string, RecordAccessor>;
+  readonly vacancyLatFieldId: string;
+  readonly vacancyLonFieldId: string;
+  readonly vacancyCompanyLinkFieldId: string;
+  readonly companyLatFieldId: string;
+  readonly companyLonFieldId: string;
+  readonly companyLocationLinkFieldId: string;
+  readonly locationLatFieldId: string;
+  readonly locationLonFieldId: string;
   readonly searchLat: number;
   readonly searchLon: number;
 }
 
+/**
+ * Resolve vacancy coordinates through the fallback chain:
+ * vacancy direct coords → company coords → alternative location coords.
+ *
+ * Works uniformly for both SDK and REST records via RecordAccessor.
+ */
 export function resolveVacancyCoordinates({
-  vacancyRecord,
+  vacancy,
   companyMap,
   locationMap,
-  fields,
+  vacancyLatFieldId,
+  vacancyLonFieldId,
+  vacancyCompanyLinkFieldId,
+  companyLatFieldId,
+  companyLonFieldId,
+  companyLocationLinkFieldId,
+  locationLatFieldId,
+  locationLonFieldId,
   searchLat,
   searchLon,
 }: ResolveParams): VacancyCoordinateResolution {
-  const vacancyLat = getCellFloat(vacancyRecord, fields.vacancyLatField);
-  const vacancyLon = getCellFloat(vacancyRecord, fields.vacancyLonField);
+  const vacancyLat = vacancy.getFloat(vacancyLatFieldId);
+  const vacancyLon = vacancy.getFloat(vacancyLonFieldId);
 
   if (vacancyLat != null && vacancyLon != null) {
     return {
@@ -66,7 +74,7 @@ export function resolveVacancyCoordinates({
     };
   }
 
-  const companyIds = getLinkedIds(vacancyRecord, fields.vacancyCompanyLinkField);
+  const companyIds = vacancy.getLinkedIds(vacancyCompanyLinkFieldId);
 
   const diagnostics = {
     hadVacancyCoords: false,
@@ -76,56 +84,66 @@ export function resolveVacancyCoordinates({
     hadAlternativeLocationCoords: false,
   };
 
-  for (const companyId of companyIds) {
-    const companyRecord = companyMap.get(companyId);
-    if (!companyRecord) continue;
+  interface Candidate extends ResolvedCoordinates {
+    readonly distanceKm: number;
+  }
 
-    const companyLat = getCellFloat(companyRecord, fields.companyLatField);
-    const companyLon = getCellFloat(companyRecord, fields.companyLonField);
+  const candidates: Candidate[] = [];
+
+  for (const companyId of companyIds) {
+    const company = companyMap.get(companyId);
+    if (!company) continue;
+
+    const companyLat = company.getFloat(companyLatFieldId);
+    const companyLon = company.getFloat(companyLonFieldId);
 
     if (companyLat != null && companyLon != null) {
       diagnostics.hadCompanyMainCoords = true;
-      return {
-        resolved: { lat: companyLat, lon: companyLon, source: "company" },
-        diagnostics,
-      };
+      candidates.push({
+        lat: companyLat,
+        lon: companyLon,
+        source: "company",
+        distanceKm: haversineKm(searchLat, searchLon, companyLat, companyLon),
+      });
     }
-  }
 
-  let bestAlternativeLocation: ResolvedCoordinates | null = null;
-  let bestDistance = Infinity;
-
-  for (const companyId of companyIds) {
-    const companyRecord = companyMap.get(companyId);
-    if (!companyRecord) continue;
-
-    const locationIds = getLinkedIds(companyRecord, fields.companyLocationLinkField);
+    const locationIds = company.getLinkedIds(companyLocationLinkFieldId);
     if (locationIds.length > 0) {
       diagnostics.hadAlternativeLocationLink = true;
     }
 
     for (const locationId of locationIds) {
-      const locationRecord = locationMap.get(locationId);
-      if (!locationRecord) continue;
+      const location = locationMap.get(locationId);
+      if (!location) continue;
 
-      const locationLat = getCellFloat(locationRecord, fields.locationLatField);
-      const locationLon = getCellFloat(locationRecord, fields.locationLonField);
-
-      if (locationLat == null || locationLon == null) continue;
+      const locLat = location.getFloat(locationLatFieldId);
+      const locLon = location.getFloat(locationLonFieldId);
+      if (locLat == null || locLon == null) continue;
 
       diagnostics.hadAlternativeLocationCoords = true;
-
-      const distance = haversineKm(searchLat, searchLon, locationLat, locationLon);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestAlternativeLocation = {
-          lat: locationLat,
-          lon: locationLon,
-          source: "location",
-        };
-      }
+      candidates.push({
+        lat: locLat,
+        lon: locLon,
+        source: "location",
+        distanceKm: haversineKm(searchLat, searchLon, locLat, locLon),
+      });
     }
   }
 
-  return { resolved: bestAlternativeLocation, diagnostics };
+  if (candidates.length === 0) {
+    return { resolved: null, diagnostics };
+  }
+
+  candidates.sort((a, b) => {
+    if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
+    if (a.lat !== b.lat) return a.lat - b.lat;
+    if (a.lon !== b.lon) return a.lon - b.lon;
+    return a.source.localeCompare(b.source);
+  });
+
+  const best = candidates[0];
+  return {
+    resolved: { lat: best.lat, lon: best.lon, source: best.source },
+    diagnostics,
+  };
 }

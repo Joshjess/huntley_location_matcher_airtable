@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { Table, Record as AirtableRecord, Field, TableOrViewQueryResult } from "@airtable/blocks/models";
+import { TableOrViewQueryResult } from "@airtable/blocks/models";
 import { useBase } from "@airtable/blocks/ui";
 import { expandRecord } from "@airtable/blocks/ui";
 import {
@@ -7,15 +7,20 @@ import {
   SearchResult,
   SearchStats,
   SearchMode,
-  VacancySearchResult,
-  CompanySearchResult,
+  SearchSourceConfig,
+  DateRange,
+  FilterDefinition,
 } from "../types";
-import { haversineKm, geocodeLocation } from "../utils/geo";
-import { SCHEMA, getTable, getQueryFields } from "../utils/config";
-import { resolveVacancyCoordinates } from "../utils/coordinateResolution";
-import { getCellFloat } from "../utils/records";
+import { geocodeLocation } from "../utils/geo";
+import { resolveSchema, buildStructuralFieldIds, discoverFilterFields, getFilterFieldNameMap } from "../utils/config";
+import { matchesKeywordQuery } from "../utils/keywordHaystack";
+import { buildCompanyKeywordHaystack, buildCandidateKeywordHaystack } from "../utils/keywordHaystack";
+import { FilterMap, applyFilters } from "../utils/filters";
+import { BaseStats } from "../utils/searchProcessor";
+import { processVacancyRecords, processSimpleRecords, processCmaRecords } from "../utils/searchProcessor";
+import { fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchCmaData } from "../utils/dataFetcher";
 
-export type FilterMap = { [fieldId: string]: string[] };
+export type { FilterMap } from "../utils/filters";
 
 interface UseLocationSearchReturn {
   searchMode: SearchMode;
@@ -26,61 +31,47 @@ interface UseLocationSearchReturn {
   setRadius: (value: string) => void;
   filters: FilterMap;
   setFilters: React.Dispatch<React.SetStateAction<FilterMap>>;
+  keywordQuery: string;
+  setKeywordQuery: React.Dispatch<React.SetStateAction<string>>;
   results: SearchResult[] | null;
   geocodedLocation: GeocodedLocation | null;
   isSearching: boolean;
   error: string | null;
   stats: SearchStats | null;
+  dynamicFilters: FilterDefinition[];
   handleSearch: () => void;
   handleExpand: (id: string) => void;
+  searchSources: SearchSourceConfig;
+  setSearchSources: React.Dispatch<React.SetStateAction<SearchSourceConfig>>;
+  dateRange: DateRange;
+  setDateRange: React.Dispatch<React.SetStateAction<DateRange>>;
 }
 
-/** Base stats from search before any client-side filtering. */
-interface BaseStats {
-  readonly total: number;
-  readonly noUsableCoords: number;
-  readonly fromVacancy: number;
-  readonly fromCompany: number;
-  readonly fromLocation: number;
-  readonly withoutVacancyCoords: number;
-  readonly withoutCompanyLink: number;
-  readonly withoutCompanyMainCoords: number;
-  readonly withoutAlternativeLocations: number;
-  readonly withoutAlternativeLocationCoords: number;
-}
-
-function getCellString(record: AirtableRecord, field: Field | null): string | null {
-  if (!field) return null;
-  const val = record.getCellValueAsString(field);
-  return val || null;
-}
-
-function applyFilters(
-  allResults: SearchResult[],
-  activeFilters: FilterMap,
-): { filtered: SearchResult[]; filteredOut: number } {
-  let filteredOut = 0;
-  const filtered: SearchResult[] = [];
-  for (const r of allResults) {
-    let passes = true;
-    for (const [fieldId, selectedValues] of Object.entries(activeFilters)) {
-      if (selectedValues.length === 0) continue;
-      const cellValue = r.filterValues[fieldId] ?? "";
-      if (!selectedValues.includes(cellValue)) { passes = false; break; }
-    }
-    if (passes) filtered.push(r);
-    else filteredOut++;
-  }
-  return { filtered, filteredOut };
-}
-
-export function useLocationSearch(): UseLocationSearchReturn {
+export function useLocationSearch(cmaPat: string): UseLocationSearchReturn {
   const base = useBase();
+
+  const schema = useMemo(() => resolveSchema(base), [base]);
+  const structuralFieldIds = useMemo(
+    () => schema ? buildStructuralFieldIds(schema) : new Set<string>(),
+    [schema],
+  );
+  const vacancyExclude = useMemo(() => schema ? new Set([
+    schema.vacancy.latFieldId,
+    schema.vacancy.lonFieldId,
+    schema.vacancy.companyLinkFieldId,
+  ]) : new Set<string>(), [schema]);
+  const companyExclude = useMemo(() => schema ? new Set([
+    schema.company.latFieldId,
+    schema.company.lonFieldId,
+  ]) : new Set<string>(), [schema]);
+
   const [searchMode, setSearchModeRaw] = useState<SearchMode>("vacancy");
   const [locationQuery, setLocationQuery] = useState("");
   const [radius, setRadius] = useState("25");
   const [filters, setFilters] = useState<FilterMap>({});
-  // Unfiltered results from the last search (all within radius, no filter applied)
+  const [keywordQuery, setKeywordQuery] = useState("");
+  const [searchSources, setSearchSources] = useState<SearchSourceConfig>({ local: true, cma: false });
+  const [dateRange, setDateRange] = useState<DateRange>({ from: "", to: "" });
   const [unfilteredResults, setUnfilteredResults] = useState<SearchResult[] | null>(null);
   const [baseStats, setBaseStats] = useState<BaseStats | null>(null);
   const [geocodedLocation, setGeocodedLocation] = useState<GeocodedLocation | null>(null);
@@ -91,6 +82,7 @@ export function useLocationSearch(): UseLocationSearchReturn {
   const setSearchMode = useCallback((mode: SearchMode) => {
     setSearchModeRaw(mode);
     setFilters({});
+    setKeywordQuery("");
     setUnfilteredResults(null);
     setBaseStats(null);
     setError(null);
@@ -105,13 +97,30 @@ export function useLocationSearch(): UseLocationSearchReturn {
     return () => { unloadCachedQuery(); };
   }, [unloadCachedQuery]);
 
-  // Derive displayed results and stats from unfiltered results + active filters
+  // ---------------------------------------------------------------------------
+  // Derive displayed results: keyword + date + facet filters (all client-side)
+  // ---------------------------------------------------------------------------
   const { results, stats } = useMemo(() => {
     if (!unfilteredResults || !baseStats) return { results: null, stats: null };
 
-    const { filtered, filteredOut } = applyFilters(unfilteredResults, filters);
+    let afterKeyword = keywordQuery.trim()
+      ? unfilteredResults.filter((r) => matchesKeywordQuery(r.keywordHaystack, keywordQuery))
+      : unfilteredResults;
 
-    // Recount source breakdown from filtered results only
+    // Date range filter
+    if (dateRange.from || dateRange.to) {
+      const fromMs = dateRange.from ? new Date(dateRange.from).getTime() : 0;
+      const toMs = dateRange.to ? new Date(dateRange.to + "T23:59:59").getTime() : Infinity;
+      afterKeyword = afterKeyword.filter((r) => {
+        if (!r.createdAt) return false;
+        const t = new Date(r.createdAt).getTime();
+        return t >= fromMs && t <= toMs;
+      });
+    }
+
+    const { filtered } = applyFilters(afterKeyword, filters);
+    const filteredOut = unfilteredResults.length - filtered.length;
+
     let fromVacancy = 0, fromCompany = 0, fromLocation = 0;
     for (const r of filtered) {
       if (r.mode === "vacancy") {
@@ -122,6 +131,8 @@ export function useLocationSearch(): UseLocationSearchReturn {
         fromCompany++;
       }
     }
+
+    const cmaMatched = filtered.filter((r) => r.source === "cma").length;
 
     const stats: SearchStats = {
       total: baseStats.total,
@@ -136,218 +147,82 @@ export function useLocationSearch(): UseLocationSearchReturn {
       withoutAlternativeLocations: baseStats.withoutAlternativeLocations,
       withoutAlternativeLocationCoords: baseStats.withoutAlternativeLocationCoords,
       filteredOut,
+      cmaTotal: baseStats.cmaTotal,
+      cmaMatched,
     };
 
     return { results: filtered, stats };
-  }, [unfilteredResults, baseStats, filters]);
+  }, [unfilteredResults, baseStats, filters, keywordQuery, dateRange]);
 
-  const handleVacancySearch = useCallback(
-    async (geo: GeocodedLocation, maxDist: number) => {
-      const vacancyTable = getTable(base, SCHEMA.vacancy.tableId);
-      if (!vacancyTable) throw new Error("Vacatures tabel niet gevonden.");
+  // ---------------------------------------------------------------------------
+  // Filter field metadata (runs on startup / mode change)
+  // ---------------------------------------------------------------------------
+  const fieldMetadata = useMemo(() => {
+    if (!schema) return [];
+    const tableId = searchMode === "vacancy"
+      ? schema.vacancy.tableId
+      : searchMode === "company"
+        ? schema.company.tableId
+        : schema.candidate.tableId;
+    const table = base.getTableByIdIfExists(tableId);
+    if (!table) return [];
 
-      const companyTable = getTable(base, SCHEMA.company.tableId);
-      const locationTable = getTable(base, SCHEMA.location.tableId);
+    const templates = discoverFilterFields(table, structuralFieldIds);
 
-      const fields = {
-        vacancyLatField: vacancyTable.getFieldByIdIfExists(SCHEMA.vacancy.latFieldId),
-        vacancyLonField: vacancyTable.getFieldByIdIfExists(SCHEMA.vacancy.lonFieldId),
-        vacancyCompanyLinkField: vacancyTable.getFieldByIdIfExists(SCHEMA.vacancy.companyLinkFieldId),
-        companyLatField: companyTable?.getFieldByIdIfExists(SCHEMA.company.latFieldId) ?? null,
-        companyLonField: companyTable?.getFieldByIdIfExists(SCHEMA.company.lonFieldId) ?? null,
-        companyLocationLinkField: companyTable?.getFieldByIdIfExists(SCHEMA.company.locationLinkFieldId) ?? null,
-        locationLatField: locationTable?.getFieldByIdIfExists(SCHEMA.location.latFieldId) ?? null,
-        locationLonField: locationTable?.getFieldByIdIfExists(SCHEMA.location.lonFieldId) ?? null,
-      };
-
-      const vacancyFilterFieldIds = Object.values(SCHEMA.vacancy.filterFields);
-
-      const [vacancyQuery, companyQuery, locationQueryResult] = await Promise.all([
-        vacancyTable.selectRecordsAsync({
-          fields: getQueryFields(vacancyTable, [
-            SCHEMA.vacancy.latFieldId,
-            SCHEMA.vacancy.lonFieldId,
-            SCHEMA.vacancy.companyLinkFieldId,
-            ...vacancyFilterFieldIds,
-          ]),
-        }),
-        companyTable
-          ? companyTable.selectRecordsAsync({
-              fields: getQueryFields(companyTable, [
-                SCHEMA.company.latFieldId,
-                SCHEMA.company.lonFieldId,
-                SCHEMA.company.locationLinkFieldId,
-              ]),
-            })
-          : Promise.resolve(null),
-        locationTable
-          ? locationTable.selectRecordsAsync({
-              fields: getQueryFields(locationTable, [
-                SCHEMA.location.latFieldId,
-                SCHEMA.location.lonFieldId,
-              ]),
-            })
-          : Promise.resolve(null),
-      ]);
-
-      try {
-        const companyMap = new Map<string, AirtableRecord>();
-        for (const rec of companyQuery?.records ?? []) companyMap.set(rec.id, rec);
-        const locationMap = new Map<string, AirtableRecord>();
-        for (const rec of locationQueryResult?.records ?? []) locationMap.set(rec.id, rec);
-
-        const allWithinRadius: VacancySearchResult[] = [];
-        let noUsableCoords = 0;
-        let withoutVacancyCoords = 0, withoutCompanyLink = 0, withoutCompanyMainCoords = 0;
-        let withoutAlternativeLocations = 0, withoutAlternativeLocationCoords = 0;
-
-        for (const vac of vacancyQuery.records) {
-          const resolution = resolveVacancyCoordinates({
-            vacancyRecord: vac,
-            companyMap,
-            locationMap,
-            fields,
-            searchLat: geo.lat,
-            searchLon: geo.lon,
-          });
-
-          if (!resolution.diagnostics.hadVacancyCoords) withoutVacancyCoords++;
-          if (!resolution.diagnostics.hadVacancyCoords && !resolution.diagnostics.hadCompanyLink)
-            withoutCompanyLink++;
-          if (companyTable && !resolution.diagnostics.hadVacancyCoords && resolution.diagnostics.hadCompanyLink && !resolution.diagnostics.hadCompanyMainCoords)
-            withoutCompanyMainCoords++;
-          if (companyTable && locationTable && !resolution.diagnostics.hadVacancyCoords && resolution.diagnostics.hadCompanyLink && !resolution.diagnostics.hadCompanyMainCoords && !resolution.diagnostics.hadAlternativeLocationLink)
-            withoutAlternativeLocations++;
-          if (companyTable && locationTable && !resolution.diagnostics.hadVacancyCoords && resolution.diagnostics.hadCompanyLink && !resolution.diagnostics.hadCompanyMainCoords && resolution.diagnostics.hadAlternativeLocationLink && !resolution.diagnostics.hadAlternativeLocationCoords)
-            withoutAlternativeLocationCoords++;
-
-          if (!resolution.resolved) { noUsableCoords++; continue; }
-
-          const distance = haversineKm(geo.lat, geo.lon, resolution.resolved.lat, resolution.resolved.lon);
-          if (distance > maxDist) continue;
-
-          // filterValues keyed by field ID for consistent filtering
-          const filterValues: { [key: string]: string | null } = {};
-          for (const [, fid] of Object.entries(SCHEMA.vacancy.filterFields)) {
-            const f = vacancyTable.getFieldByIdIfExists(fid);
-            filterValues[fid] = getCellString(vac, f);
+    return templates.map((template) => {
+      const field = table.getFieldByIdIfExists(template.fieldId);
+      let metadataOptions: string[] = [];
+      if (field) {
+        try {
+          const cfg = field.config;
+          const choices = (cfg.options as { choices?: Array<{ name: string }> })?.choices;
+          if (choices && choices.length > 0) {
+            metadataOptions = choices.map((c) => c.name).filter(Boolean).sort((a, b) => a.localeCompare(b, "nl"));
           }
-
-          allWithinRadius.push({
-            mode: "vacancy",
-            id: vac.id,
-            name: vac.name || "Naamloze vacature",
-            distance,
-            coordSource: resolution.resolved.source,
-            filterValues,
-          });
-        }
-
-        allWithinRadius.sort((a, b) => a.distance - b.distance);
-
-        cachedQueryRef.current = vacancyQuery;
-
-        return {
-          allWithinRadius: allWithinRadius as SearchResult[],
-          baseStats: {
-            total: vacancyQuery.records.length,
-            noUsableCoords,
-            fromVacancy: 0, // will be recounted from filtered results
-            fromCompany: 0,
-            fromLocation: 0,
-            withoutVacancyCoords,
-            withoutCompanyLink,
-            withoutCompanyMainCoords,
-            withoutAlternativeLocations,
-            withoutAlternativeLocationCoords,
-          },
-          queriesToUnload: [companyQuery, locationQueryResult],
-        };
-      } catch (err) {
-        vacancyQuery.unloadData();
-        companyQuery?.unloadData();
-        locationQueryResult?.unloadData();
-        throw err;
+        } catch { /* ignore */ }
       }
-    },
-    [base],
-  );
+      return { ...template, metadataOptions };
+    });
+  }, [base, searchMode, schema, structuralFieldIds]);
 
-  const handleCompanySearch = useCallback(
-    async (geo: GeocodedLocation, maxDist: number) => {
-      const companyTable = getTable(base, SCHEMA.company.tableId);
-      if (!companyTable) throw new Error("Bedrijven tabel niet gevonden.");
-
-      const companyFilterFieldIds = Object.values(SCHEMA.company.filterFields);
-
-      const companyQuery = await companyTable.selectRecordsAsync({
-        fields: getQueryFields(companyTable, [
-          SCHEMA.company.latFieldId,
-          SCHEMA.company.lonFieldId,
-          ...companyFilterFieldIds,
-        ]),
-      });
-
-      try {
-        const allWithinRadius: CompanySearchResult[] = [];
-        let noUsableCoords = 0;
-
-        for (const rec of companyQuery.records) {
-          const lat = getCellFloat(rec, companyTable.getFieldByIdIfExists(SCHEMA.company.latFieldId));
-          const lon = getCellFloat(rec, companyTable.getFieldByIdIfExists(SCHEMA.company.lonFieldId));
-
-          if (lat == null || lon == null) { noUsableCoords++; continue; }
-
-          const distance = haversineKm(geo.lat, geo.lon, lat, lon);
-          if (distance > maxDist) continue;
-
-          // filterValues keyed by field ID for consistent filtering
-          const filterValues: { [key: string]: string | null } = {};
-          for (const [, fid] of Object.entries(SCHEMA.company.filterFields)) {
-            const f = companyTable.getFieldByIdIfExists(fid);
-            filterValues[fid] = getCellString(rec, f);
+  // Build final filters: use result-based options when available, fall back to metadata
+  const dynamicFilters: FilterDefinition[] = useMemo(() => {
+    return fieldMetadata.map((entry) => {
+      if (unfilteredResults && unfilteredResults.length > 0) {
+        const uniqueValues = new Set<string>();
+        for (const result of unfilteredResults) {
+          const cellValue = result.filterValues[entry.fieldId];
+          if (cellValue == null) continue;
+          if (Array.isArray(cellValue)) {
+            for (const v of cellValue) if (v) uniqueValues.add(v);
+          } else if (cellValue) {
+            uniqueValues.add(cellValue);
           }
-
-          allWithinRadius.push({
-            mode: "company",
-            id: rec.id,
-            name: rec.name || "Naamloos bedrijf",
-            distance,
-            filterValues,
-          });
         }
-
-        allWithinRadius.sort((a, b) => a.distance - b.distance);
-
-        cachedQueryRef.current = companyQuery;
-
-        return {
-          allWithinRadius: allWithinRadius as SearchResult[],
-          baseStats: {
-            total: companyQuery.records.length,
-            noUsableCoords,
-            fromVacancy: 0,
-            fromCompany: 0,
-            fromLocation: 0,
-            withoutVacancyCoords: 0,
-            withoutCompanyLink: 0,
-            withoutCompanyMainCoords: 0,
-            withoutAlternativeLocations: 0,
-            withoutAlternativeLocationCoords: 0,
-          },
-          queriesToUnload: [] as (TableOrViewQueryResult | null)[],
-        };
-      } catch (err) {
-        companyQuery.unloadData();
-        throw err;
+        if (uniqueValues.size > 0) {
+          return { fieldId: entry.fieldId, label: entry.label, options: [...uniqueValues].sort((a, b) => a.localeCompare(b, "nl")) };
+        }
       }
-    },
-    [base],
-  );
+      return { fieldId: entry.fieldId, label: entry.label, options: entry.metadataOptions };
+    });
+  }, [fieldMetadata, unfilteredResults]);
 
+  // ---------------------------------------------------------------------------
+  // Main search handler
+  // ---------------------------------------------------------------------------
   const handleSearch = useCallback(async () => {
     if (!locationQuery.trim()) {
       setError("Voer een locatie in om te zoeken.");
+      return;
+    }
+
+    if (!schema) {
+      setError("Tabellen niet gevonden. Controleer of de tabellen Vacatures, Bedrijven, Kandidaten en Locaties bestaan met Latitude/Longitude velden.");
+      return;
+    }
+
+    if (searchMode !== "candidate" && !searchSources.local && !searchSources.cma) {
+      setError("Selecteer minstens één bron om in te zoeken.");
       return;
     }
 
@@ -356,6 +231,9 @@ export function useLocationSearch(): UseLocationSearchReturn {
     setUnfilteredResults(null);
     setBaseStats(null);
     unloadCachedQuery();
+
+    const pat = cmaPat.trim();
+    const usePat = pat.length > 0 ? pat : null;
 
     try {
       const geo = await geocodeLocation(locationQuery.trim());
@@ -373,24 +251,109 @@ export function useLocationSearch(): UseLocationSearchReturn {
         return;
       }
 
-      const searchFn = searchMode === "company" ? handleCompanySearch : handleVacancySearch;
-      const { allWithinRadius, baseStats: newBaseStats, queriesToUnload } = await searchFn(geo, maxDist);
+      if (searchMode === "candidate") {
+        const data = await fetchCandidateData(base, usePat, geo, maxDist, schema, structuralFieldIds);
+        const result = processSimpleRecords({
+          mode: "candidate",
+          records: data.records,
+          geo,
+          maxDist,
+          latFieldId: schema.candidate.latFieldId,
+          lonFieldId: schema.candidate.lonFieldId,
+          filterFieldIds: data.filterFieldIds,
+          buildHaystack: buildCandidateKeywordHaystack,
+        });
+        if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
+        for (const q of data.queriesToUnload) q?.unloadData();
+        setUnfilteredResults(result.results);
+        setBaseStats(result.baseStats);
+      } else {
+        // Vacancy or Company search with optional CMA
+        let localResults: SearchResult[] = [];
+        let localStats: BaseStats = {
+          total: 0, noUsableCoords: 0, fromVacancy: 0, fromCompany: 0, fromLocation: 0,
+          withoutVacancyCoords: 0, withoutCompanyLink: 0, withoutCompanyMainCoords: 0,
+          withoutAlternativeLocations: 0, withoutAlternativeLocationCoords: 0,
+          cmaTotal: 0, cmaMatched: 0,
+        };
 
-      setUnfilteredResults(allWithinRadius);
-      setBaseStats(newBaseStats);
+        if (searchSources.local) {
+          if (searchMode === "company") {
+            const data = await fetchCompanyData(base, usePat, geo, maxDist, schema, structuralFieldIds);
+            const result = processSimpleRecords({
+              mode: "company",
+              records: data.records,
+              geo,
+              maxDist,
+              latFieldId: schema.company.latFieldId,
+              lonFieldId: schema.company.lonFieldId,
+              filterFieldIds: data.filterFieldIds,
+              buildHaystack: (rec) => buildCompanyKeywordHaystack(rec, companyExclude),
+            });
+            if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
+            for (const q of data.queriesToUnload) q?.unloadData();
+            localResults = result.results;
+            localStats = result.baseStats;
+          } else {
+            const data = await fetchVacancyData(base, usePat, geo, maxDist, schema, structuralFieldIds);
+            const result = processVacancyRecords({
+              records: data.records,
+              geo,
+              maxDist,
+              companyMap: data.companyMap,
+              locationMap: data.locationMap,
+              filterFieldIds: data.filterFieldIds,
+              schema,
+              vacancyExcludeFieldIds: vacancyExclude,
+              companyExcludeFieldIds: companyExclude,
+            });
+            if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
+            for (const q of data.queriesToUnload) q?.unloadData();
+            localResults = result.results;
+            localStats = result.baseStats;
+          }
+        }
 
-      for (const q of queriesToUnload) q?.unloadData();
+        // CMA search (vacancy mode only)
+        let cmaResults: SearchResult[] = [];
+        let cmaTotal = 0;
+        if (searchSources.cma && usePat && searchMode === "vacancy") {
+          const vacancyTable = base.getTableByIdIfExists(schema.vacancy.tableId);
+          const cmaNameToId = vacancyTable ? getFilterFieldNameMap(vacancyTable, structuralFieldIds) : new Map<string, string>();
+          const cmaRecords = await fetchCmaData(usePat, geo, maxDist);
+          const cmaResult = processCmaRecords(cmaRecords, geo, maxDist, cmaNameToId);
+          cmaResults = cmaResult.results;
+          cmaTotal = cmaResult.total;
+        }
+
+        const allResults = [...localResults, ...cmaResults].sort((a, b) => a.distance - b.distance);
+        setUnfilteredResults(allResults);
+        setBaseStats({
+          ...localStats,
+          cmaTotal,
+          cmaMatched: cmaResults.length,
+        });
+      }
     } catch (err) {
       setError(`Er ging iets mis: ${(err as Error).message}`);
     } finally {
       setIsSearching(false);
     }
-  }, [locationQuery, radius, searchMode, handleVacancySearch, handleCompanySearch, unloadCachedQuery]);
+  }, [locationQuery, radius, searchMode, searchSources, cmaPat, base, unloadCachedQuery, schema, structuralFieldIds, vacancyExclude, companyExclude]);
 
   const handleExpand = useCallback((id: string): void => {
     const record = cachedQueryRef.current?.getRecordByIdIfExists(id);
-    if (record) expandRecord(record);
-  }, []);
+    if (record) {
+      expandRecord(record);
+      return;
+    }
+    const tableId = searchMode === "company"
+      ? schema?.company.tableId
+      : searchMode === "candidate"
+        ? schema?.candidate.tableId
+        : schema?.vacancy.tableId;
+    if (tableId) window.open(`https://airtable.com/${base.id}/${tableId}/${id}`, "_blank");
+  }, [base, searchMode, schema]);
 
   return {
     searchMode,
@@ -401,12 +364,19 @@ export function useLocationSearch(): UseLocationSearchReturn {
     setRadius,
     filters,
     setFilters,
+    keywordQuery,
+    setKeywordQuery,
     results,
     geocodedLocation,
     isSearching,
     error,
     stats,
+    dynamicFilters,
     handleSearch,
     handleExpand,
+    searchSources,
+    setSearchSources,
+    dateRange,
+    setDateRange,
   };
 }
