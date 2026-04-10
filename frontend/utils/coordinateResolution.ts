@@ -1,5 +1,6 @@
 import { CoordSource } from "../types";
 import { haversineKm } from "./geo";
+import { BoundingBox } from "./airtableRest";
 import { RecordAccessor } from "./recordAccessor";
 
 interface ResolvedCoordinates {
@@ -25,16 +26,28 @@ interface ResolveParams {
   readonly vacancy: RecordAccessor;
   readonly companyMap: ReadonlyMap<string, RecordAccessor>;
   readonly locationMap: ReadonlyMap<string, RecordAccessor>;
+  readonly companyLocationLinks: ReadonlyMap<string, string[]>;
+  readonly boundingBox: BoundingBox;
   readonly vacancyLatFieldId: string;
   readonly vacancyLonFieldId: string;
   readonly vacancyCompanyLinkFieldId: string;
   readonly companyLatFieldId: string;
   readonly companyLonFieldId: string;
-  readonly companyLocationLinkFieldId: string;
   readonly locationLatFieldId: string;
   readonly locationLonFieldId: string;
   readonly searchLat: number;
   readonly searchLon: number;
+}
+
+function isWithinBoundingBox(
+  lat: number,
+  lon: number,
+  boundingBox: BoundingBox,
+): boolean {
+  return lat >= boundingBox.minLat &&
+    lat <= boundingBox.maxLat &&
+    lon >= boundingBox.minLon &&
+    lon <= boundingBox.maxLon;
 }
 
 /**
@@ -47,12 +60,13 @@ export function resolveVacancyCoordinates({
   vacancy,
   companyMap,
   locationMap,
+  companyLocationLinks,
+  boundingBox,
   vacancyLatFieldId,
   vacancyLonFieldId,
   vacancyCompanyLinkFieldId,
   companyLatFieldId,
   companyLonFieldId,
-  companyLocationLinkFieldId,
   locationLatFieldId,
   locationLonFieldId,
   searchLat,
@@ -88,7 +102,30 @@ export function resolveVacancyCoordinates({
     readonly distanceKm: number;
   }
 
-  const candidates: Candidate[] = [];
+  let bestCandidate: Candidate | null = null;
+
+  function considerCandidate(candidate: Candidate): void {
+    if (bestCandidate == null) {
+      bestCandidate = candidate;
+      return;
+    }
+
+    if (candidate.distanceKm !== bestCandidate.distanceKm) {
+      if (candidate.distanceKm < bestCandidate.distanceKm) bestCandidate = candidate;
+      return;
+    }
+    if (candidate.lat !== bestCandidate.lat) {
+      if (candidate.lat < bestCandidate.lat) bestCandidate = candidate;
+      return;
+    }
+    if (candidate.lon !== bestCandidate.lon) {
+      if (candidate.lon < bestCandidate.lon) bestCandidate = candidate;
+      return;
+    }
+    if (candidate.source.localeCompare(bestCandidate.source) < 0) {
+      bestCandidate = candidate;
+    }
+  }
 
   for (const companyId of companyIds) {
     const company = companyMap.get(companyId);
@@ -99,15 +136,17 @@ export function resolveVacancyCoordinates({
 
     if (companyLat != null && companyLon != null) {
       diagnostics.hadCompanyMainCoords = true;
-      candidates.push({
-        lat: companyLat,
-        lon: companyLon,
-        source: "company",
-        distanceKm: haversineKm(searchLat, searchLon, companyLat, companyLon),
-      });
+      if (isWithinBoundingBox(companyLat, companyLon, boundingBox)) {
+        considerCandidate({
+          lat: companyLat,
+          lon: companyLon,
+          source: "company",
+          distanceKm: haversineKm(searchLat, searchLon, companyLat, companyLon),
+        });
+      }
     }
 
-    const locationIds = company.getLinkedIds(companyLocationLinkFieldId);
+    const locationIds = companyLocationLinks.get(companyId) ?? [];
     if (locationIds.length > 0) {
       diagnostics.hadAlternativeLocationLink = true;
     }
@@ -121,29 +160,24 @@ export function resolveVacancyCoordinates({
       if (locLat == null || locLon == null) continue;
 
       diagnostics.hadAlternativeLocationCoords = true;
-      candidates.push({
-        lat: locLat,
-        lon: locLon,
-        source: "location",
-        distanceKm: haversineKm(searchLat, searchLon, locLat, locLon),
-      });
+      if (isWithinBoundingBox(locLat, locLon, boundingBox)) {
+        considerCandidate({
+          lat: locLat,
+          lon: locLon,
+          source: "location",
+          distanceKm: haversineKm(searchLat, searchLon, locLat, locLon),
+        });
+      }
     }
   }
 
-  if (candidates.length === 0) {
+  if (bestCandidate == null) {
     return { resolved: null, diagnostics };
   }
 
-  candidates.sort((a, b) => {
-    if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
-    if (a.lat !== b.lat) return a.lat - b.lat;
-    if (a.lon !== b.lon) return a.lon - b.lon;
-    return a.source.localeCompare(b.source);
-  });
-
-  const best = candidates[0];
+  const resolvedCandidate = bestCandidate as Candidate;
   return {
-    resolved: { lat: best.lat, lon: best.lon, source: best.source },
+    resolved: { lat: resolvedCandidate.lat, lon: resolvedCandidate.lon, source: resolvedCandidate.source },
     diagnostics,
   };
 }

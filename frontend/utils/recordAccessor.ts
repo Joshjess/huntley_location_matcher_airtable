@@ -1,4 +1,4 @@
-import { Record as AirtableRecord, Table, Field, FieldType } from "@airtable/blocks/models";
+import { Record as AirtableRecord, Table, Field } from "@airtable/blocks/models";
 import { FilterValue, LinkedRecordCellValue } from "../types";
 
 /**
@@ -21,7 +21,11 @@ export interface RecordAccessor {
 // SDK Record Adapter
 // ---------------------------------------------------------------------------
 
-export function fromSdkRecord(record: AirtableRecord, table: Table): RecordAccessor {
+export function fromSdkRecord(
+  record: AirtableRecord,
+  table: Table,
+  loadedFieldIds: readonly string[] = table.fields.map((field) => field.id),
+): RecordAccessor {
   const fieldCache = new Map<string, Field | null>();
   function getField(fieldId: string): Field | null {
     if (!fieldCache.has(fieldId)) {
@@ -34,7 +38,7 @@ export function fromSdkRecord(record: AirtableRecord, table: Table): RecordAcces
     id: record.id,
     name: record.name,
     createdAt: (record as unknown as { createdTime?: Date }).createdTime?.toISOString?.() ?? null,
-    fieldIds: table.fields.map((f) => f.id),
+    fieldIds: [...loadedFieldIds],
 
     getFloat(fieldId: string): number | null {
       const field = getField(fieldId);
@@ -120,6 +124,24 @@ export function withLinkOverrides(
     getLinkedIds(fieldId: string): string[] {
       if (fieldId in overrides) return overrides[fieldId];
       return base.getLinkedIds(fieldId);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Float override wrapper — injects REST-fetched coordinate data into an accessor
+// Used because the SDK can't see number fields (Latitude/Longitude) on some tables.
+// ---------------------------------------------------------------------------
+
+export function withFloatOverrides(
+  base: RecordAccessor,
+  overrides: Record<string, number>,
+): RecordAccessor {
+  return {
+    ...base,
+    getFloat(fieldId: string): number | null {
+      if (fieldId in overrides) return overrides[fieldId];
+      return base.getFloat(fieldId);
     },
   };
 }

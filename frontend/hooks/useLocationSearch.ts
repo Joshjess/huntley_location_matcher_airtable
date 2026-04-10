@@ -13,12 +13,13 @@ import {
 } from "../types";
 import { geocodeLocation } from "../utils/geo";
 import { SCHEMA, getFilterTemplates } from "../utils/config";
-import { matchesKeywordQuery } from "../utils/keywordHaystack";
+import { matchesKeywordTokens } from "../utils/keywordHaystack";
 import { buildCompanyKeywordHaystack, buildCandidateKeywordHaystack } from "../utils/keywordHaystack";
 import { FilterMap, applyFilters } from "../utils/filters";
 import { BaseStats } from "../utils/searchProcessor";
 import { processVacancyRecords, processSimpleRecords, processVacatureScraperRecords } from "../utils/searchProcessor";
-import { fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchVacatureScraperData } from "../utils/dataFetcher";
+import { FetchResult, fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchVacatureScraperData } from "../utils/dataFetcher";
+import { VacancyCoordinateResolution } from "../utils/coordinateResolution";
 
 export type { FilterMap } from "../utils/filters";
 
@@ -45,6 +46,74 @@ interface UseLocationSearchReturn {
   setSearchSources: React.Dispatch<React.SetStateAction<SearchSourceConfig>>;
   dateRange: DateRange;
   setDateRange: React.Dispatch<React.SetStateAction<DateRange>>;
+}
+
+interface LocalSearchCacheEntry {
+  readonly key: string;
+  readonly data: FetchResult;
+  readonly companyKeywordHaystackCache: Map<string, string>;
+  readonly resolutionCache: Map<string, VacancyCoordinateResolution>;
+}
+
+interface PendingLocalSearchCacheEntry {
+  readonly key: string;
+  readonly promise: Promise<LocalSearchCacheEntry>;
+}
+
+function unloadFetchResult(data: FetchResult): void {
+  data.cacheableQuery?.unloadData();
+  for (const query of data.queriesToUnload) {
+    query?.unloadData();
+  }
+}
+
+function mergeSortedResults(
+  left: SearchResult[],
+  right: SearchResult[],
+): SearchResult[] {
+  if (left.length === 0) return right;
+  if (right.length === 0) return left;
+
+  const merged: SearchResult[] = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex].distance <= right[rightIndex].distance) {
+      merged.push(left[leftIndex]);
+      leftIndex++;
+    } else {
+      merged.push(right[rightIndex]);
+      rightIndex++;
+    }
+  }
+
+  while (leftIndex < left.length) {
+    merged.push(left[leftIndex]);
+    leftIndex++;
+  }
+
+  while (rightIndex < right.length) {
+    merged.push(right[rightIndex]);
+    rightIndex++;
+  }
+
+  return merged;
+}
+
+function scheduleIdleTask(task: () => void): () => void {
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  };
+
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(task, { timeout: 1500 });
+    return () => idleWindow.cancelIdleCallback?.(handle);
+  }
+
+  const timeoutHandle = window.setTimeout(task, 250);
+  return () => window.clearTimeout(timeoutHandle);
 }
 
 export function useLocationSearch(vacatureScraperPat: string): UseLocationSearchReturn {
@@ -74,6 +143,8 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cachedQueryRef = useRef<TableOrViewQueryResult | null>(null);
+  const localSearchCacheRef = useRef<Partial<Record<SearchMode, LocalSearchCacheEntry>>>({});
+  const pendingLocalSearchCacheRef = useRef<Partial<Record<SearchMode, PendingLocalSearchCacheEntry>>>({});
 
   const setSearchMode = useCallback((mode: SearchMode) => {
     setSearchModeRaw(mode);
@@ -84,23 +155,112 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     setError(null);
   }, []);
 
-  const unloadCachedQuery = useCallback((): void => {
-    cachedQueryRef.current?.unloadData();
+  const unloadCachedQueries = useCallback((): void => {
+    for (const cacheEntry of Object.values(localSearchCacheRef.current)) {
+      if (cacheEntry) unloadFetchResult(cacheEntry.data);
+    }
+    localSearchCacheRef.current = {};
+    pendingLocalSearchCacheRef.current = {};
     cachedQueryRef.current = null;
   }, []);
 
   useEffect(() => {
-    return () => { unloadCachedQuery(); };
-  }, [unloadCachedQuery]);
+    return () => { unloadCachedQueries(); };
+  }, [unloadCachedQueries]);
+
+  const getLocalSearchCacheEntry = useCallback(async (
+    mode: SearchMode,
+    pat: string | null,
+  ): Promise<LocalSearchCacheEntry> => {
+    const cacheKey = `${base.id}:${mode}:${pat ?? ""}`;
+    const cachedEntry = localSearchCacheRef.current[mode];
+    if (cachedEntry?.key === cacheKey) {
+      return cachedEntry;
+    }
+
+    const pendingEntry = pendingLocalSearchCacheRef.current[mode];
+    if (pendingEntry?.key === cacheKey) {
+      return pendingEntry.promise;
+    }
+
+    if (cachedEntry) {
+      unloadFetchResult(cachedEntry.data);
+    }
+
+    const promise = (async (): Promise<LocalSearchCacheEntry> => {
+      const data = mode === "vacancy"
+        ? await fetchVacancyData(base, pat, schema)
+        : mode === "company"
+          ? await fetchCompanyData(base, pat, schema)
+          : await fetchCandidateData(base, schema);
+
+      const cacheEntry: LocalSearchCacheEntry = {
+        key: cacheKey,
+        data,
+        companyKeywordHaystackCache: new Map<string, string>(),
+        resolutionCache: new Map<string, VacancyCoordinateResolution>(),
+      };
+      localSearchCacheRef.current[mode] = cacheEntry;
+      return cacheEntry;
+    })();
+
+    pendingLocalSearchCacheRef.current[mode] = { key: cacheKey, promise };
+
+    try {
+      return await promise;
+    } finally {
+      const latestPendingEntry = pendingLocalSearchCacheRef.current[mode];
+      if (latestPendingEntry?.key === cacheKey) {
+        delete pendingLocalSearchCacheRef.current[mode];
+      }
+    }
+  }, [base, schema]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let cancelIdlePrefetch = () => {};
+
+    const normalizedPat = vacatureScraperPat.trim() || null;
+
+    const preloadMode = async (mode: SearchMode, pat: string | null): Promise<void> => {
+      try {
+        await getLocalSearchCacheEntry(mode, pat);
+      } catch (err) {
+        console.warn(`Startup prefetch failed for ${mode} search data.`, err);
+      }
+    };
+
+    void preloadMode("vacancy", normalizedPat).then(() => {
+      if (cancelled) return;
+      cancelIdlePrefetch = scheduleIdleTask(() => {
+        if (cancelled) return;
+        void preloadMode("company", normalizedPat);
+        void preloadMode("candidate", null);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelIdlePrefetch();
+    };
+  }, [getLocalSearchCacheEntry, vacatureScraperPat]);
 
   // ---------------------------------------------------------------------------
   // Derive displayed results: keyword + date + facet filters (all client-side)
   // ---------------------------------------------------------------------------
+  const keywordTokens = useMemo(() => {
+    return keywordQuery
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+  }, [keywordQuery]);
+
   const { results, stats } = useMemo(() => {
     if (!unfilteredResults || !baseStats) return { results: null, stats: null };
 
-    let afterKeyword = keywordQuery.trim()
-      ? unfilteredResults.filter((r) => matchesKeywordQuery(r.keywordHaystack, keywordQuery))
+    let afterKeyword = keywordTokens.length > 0
+      ? unfilteredResults.filter((r) => matchesKeywordTokens(r.keywordHaystack, keywordTokens))
       : unfilteredResults;
 
     // Date range filter
@@ -117,8 +277,9 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     const { filtered } = applyFilters(afterKeyword, filters);
     const filteredOut = unfilteredResults.length - filtered.length;
 
-    let fromVacancy = 0, fromCompany = 0, fromLocation = 0;
+    let fromVacancy = 0, fromCompany = 0, fromLocation = 0, vacatureScraperMatched = 0;
     for (const r of filtered) {
+      if (r.source === "vacatureScraper") vacatureScraperMatched++;
       if (r.mode === "vacancy") {
         if (r.coordSource === "vacancy") fromVacancy++;
         else if (r.coordSource === "company") fromCompany++;
@@ -127,8 +288,6 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
         fromCompany++;
       }
     }
-
-    const vacatureScraperMatched = filtered.filter((r) => r.source === "vacatureScraper").length;
 
     const stats: SearchStats = {
       total: baseStats.total,
@@ -148,7 +307,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     };
 
     return { results: filtered, stats };
-  }, [unfilteredResults, baseStats, filters, keywordQuery, dateRange]);
+  }, [unfilteredResults, baseStats, filters, keywordTokens, dateRange]);
 
   // ---------------------------------------------------------------------------
   // Filter field metadata — templates are hardcoded, options from SDK metadata
@@ -181,26 +340,42 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
   }, [base, searchMode, schema]);
 
   // Build final filters: use result-based options when available, fall back to metadata
+  const resultFilterOptions = useMemo(() => {
+    const optionMap = new Map<string, Set<string>>();
+    if (!unfilteredResults) return optionMap;
+
+    for (const result of unfilteredResults) {
+      for (const [fieldId, cellValue] of Object.entries(result.filterValues)) {
+        if (cellValue == null) continue;
+
+        const options = optionMap.get(fieldId) ?? new Set<string>();
+        if (Array.isArray(cellValue)) {
+          for (const value of cellValue) {
+            if (value) options.add(value);
+          }
+        } else if (cellValue) {
+          options.add(cellValue);
+        }
+        optionMap.set(fieldId, options);
+      }
+    }
+
+    return optionMap;
+  }, [unfilteredResults]);
+
   const dynamicFilters: FilterDefinition[] = useMemo(() => {
     return fieldMetadata.map((entry) => {
-      if (unfilteredResults && unfilteredResults.length > 0) {
-        const uniqueValues = new Set<string>();
-        for (const result of unfilteredResults) {
-          const cellValue = result.filterValues[entry.fieldId];
-          if (cellValue == null) continue;
-          if (Array.isArray(cellValue)) {
-            for (const v of cellValue) if (v) uniqueValues.add(v);
-          } else if (cellValue) {
-            uniqueValues.add(cellValue);
-          }
-        }
-        if (uniqueValues.size > 0) {
-          return { fieldId: entry.fieldId, label: entry.label, options: [...uniqueValues].sort((a, b) => a.localeCompare(b, "nl")) };
-        }
+      const options = resultFilterOptions.get(entry.fieldId);
+      if (options && options.size > 0) {
+        return {
+          fieldId: entry.fieldId,
+          label: entry.label,
+          options: [...options].sort((a, b) => a.localeCompare(b, "nl")),
+        };
       }
       return { fieldId: entry.fieldId, label: entry.label, options: entry.metadataOptions };
     });
-  }, [fieldMetadata, unfilteredResults]);
+  }, [fieldMetadata, resultFilterOptions]);
 
   // ---------------------------------------------------------------------------
   // Main search handler
@@ -220,7 +395,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     setError(null);
     setUnfilteredResults(null);
     setBaseStats(null);
-    unloadCachedQuery();
+    cachedQueryRef.current = null;
 
     const pat = vacatureScraperPat.trim();
     const usePat = pat.length > 0 ? pat : null;
@@ -243,7 +418,8 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
 
       if (searchMode === "candidate") {
         const filterTemplates = getFilterTemplates("candidate");
-        const data = await fetchCandidateData(base, schema);
+        const cacheEntry = await getLocalSearchCacheEntry("candidate", null);
+        const data = cacheEntry.data;
         const result = processSimpleRecords({
           mode: "candidate",
           records: data.records,
@@ -255,7 +431,6 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
           buildHaystack: buildCandidateKeywordHaystack,
         });
         if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
-        for (const q of data.queriesToUnload) q?.unloadData();
         setUnfilteredResults(result.results);
         setBaseStats(result.baseStats);
       } else {
@@ -270,7 +445,8 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
 
         if (searchSources.local) {
           if (searchMode === "company") {
-            const data = await fetchCompanyData(base, schema);
+            const cacheEntry = await getLocalSearchCacheEntry("company", usePat);
+            const data = cacheEntry.data;
             const result = processSimpleRecords({
               mode: "company",
               records: data.records,
@@ -282,24 +458,27 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
               buildHaystack: (rec) => buildCompanyKeywordHaystack(rec, companyExclude),
             });
             if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
-            for (const q of data.queriesToUnload) q?.unloadData();
             localResults = result.results;
             localStats = result.baseStats;
           } else {
-            const data = await fetchVacancyData(base, usePat, schema);
+            const cacheEntry = await getLocalSearchCacheEntry("vacancy", usePat);
+            const data = cacheEntry.data;
             const result = processVacancyRecords({
               records: data.records,
               geo,
               maxDist,
               companyMap: data.companyMap,
               locationMap: data.locationMap,
+              companyLocationLinks: data.companyLocationLinks,
               filterFieldIds: data.filterFieldIds,
               schema,
               vacancyExcludeFieldIds: vacancyExclude,
               companyExcludeFieldIds: companyExclude,
+              companyKeywordHaystackCache: cacheEntry.companyKeywordHaystackCache,
+              resolutionCache: cacheEntry.resolutionCache,
+              resolutionCacheKeyPrefix: `${geo.lat}:${geo.lon}:${maxDist}`,
             });
             if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
-            for (const q of data.queriesToUnload) q?.unloadData();
             localResults = result.results;
             localStats = result.baseStats;
           }
@@ -315,7 +494,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
           vacatureScraperTotal = scraperResult.total;
         }
 
-        const allResults = [...localResults, ...vacatureScraperResults].sort((a, b) => a.distance - b.distance);
+        const allResults = mergeSortedResults(localResults, vacatureScraperResults);
         setUnfilteredResults(allResults);
         setBaseStats({
           ...localStats,
@@ -328,7 +507,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     } finally {
       setIsSearching(false);
     }
-  }, [locationQuery, radius, searchMode, searchSources, vacatureScraperPat, base, unloadCachedQuery, schema, vacancyExclude, companyExclude]);
+  }, [locationQuery, radius, searchMode, searchSources, vacatureScraperPat, getLocalSearchCacheEntry, schema, vacancyExclude, companyExclude]);
 
   const handleExpand = useCallback((id: string): void => {
     const record = cachedQueryRef.current?.getRecordByIdIfExists(id);

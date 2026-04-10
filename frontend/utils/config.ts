@@ -27,6 +27,7 @@ export interface ResolvedSchema {
   };
   readonly location: {
     readonly tableId: string;
+    readonly companyLinkFieldId: string;
     readonly latFieldId: string;
     readonly lonFieldId: string;
   };
@@ -53,6 +54,7 @@ export const SCHEMA: ResolvedSchema = {
   },
   location: {
     tableId: "tblFiEJUWOZGABAxF",
+    companyLinkFieldId: "fldgKJFnIhNZJUvGU",
     latFieldId: "fldgGAjIxs2IkA3Pl",
     lonFieldId: "fld7VK9jnIc1evzY0",
   },
@@ -78,6 +80,53 @@ const FILTER_FIELDS: Record<SearchMode, readonly FilterTemplate[]> = {
 
 export function getFilterTemplates(searchMode: SearchMode): readonly FilterTemplate[] {
   return FILTER_FIELDS[searchMode];
+}
+
+const SEARCHABLE_FIELD_TYPES = new Set<string>([
+  "singleLineText",
+  "multilineText",
+  "richText",
+  "singleSelect",
+  "multipleSelects",
+  "multipleRecordLinks",
+  "phoneNumber",
+  "email",
+  "url",
+  "number",
+  "currency",
+  "percent",
+  "duration",
+  "checkbox",
+  "date",
+  "dateTime",
+  "formula",
+  "rollup",
+  "multipleLookupValues",
+  "count",
+  "rating",
+  "autoNumber",
+]);
+
+export function uniqueFieldIds(...groups: ReadonlyArray<readonly string[]>): string[] {
+  const fieldIds = new Set<string>();
+  for (const group of groups) {
+    for (const fieldId of group) {
+      if (fieldId) fieldIds.add(fieldId);
+    }
+  }
+  return [...fieldIds];
+}
+
+export function getSearchableFieldIds(
+  table: Table,
+  excludeFieldIds: readonly string[] = [],
+): string[] {
+  const excludedFieldIds = new Set(excludeFieldIds);
+
+  return table.fields
+    .filter((field) => !excludedFieldIds.has(field.id))
+    .filter((field) => SEARCHABLE_FIELD_TYPES.has(String(field.type)))
+    .map((field) => field.id);
 }
 
 // ---------------------------------------------------------------------------

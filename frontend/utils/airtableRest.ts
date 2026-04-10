@@ -179,6 +179,55 @@ export async function fetchLinkMapping(
 }
 
 // ---------------------------------------------------------------------------
+// Coordinate data fetch — gets lat/lon for all records in a table via REST
+// Used because the SDK can't see number fields on Bedrijven/Locaties.
+// ---------------------------------------------------------------------------
+
+export interface CoordEntry {
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Fetch a Map<recordId, {lat, lon}> for all records that have both lat and lon.
+ * Paginates automatically. Only fetches the two coordinate fields.
+ */
+export async function fetchCoordinateData(
+  pat: string,
+  baseId: string,
+  tableId: string,
+  latFieldId: string,
+  lonFieldId: string,
+): Promise<Map<string, CoordEntry>> {
+  const map = new Map<string, CoordEntry>();
+  let offset: string | undefined;
+
+  const formula = encodeURIComponent(
+    `AND({${latFieldId}}!=BLANK(),{${lonFieldId}}!=BLANK())`,
+  );
+
+  do {
+    const offsetParam = offset ? `&offset=${encodeURIComponent(offset)}` : "";
+    const path = `/${baseId}/${tableId}?returnFieldsByFieldId=true&fields%5B%5D=${latFieldId}&fields%5B%5D=${lonFieldId}&filterByFormula=${formula}${offsetParam}`;
+
+    const res = await airtableFetch(pat, path);
+    const data: ListResponse = await res.json();
+
+    for (const rec of data.records) {
+      const lat = Number(rec.fields[latFieldId]);
+      const lon = Number(rec.fields[lonFieldId]);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        map.set(rec.id, { lat, lon });
+      }
+    }
+
+    offset = data.offset;
+  } while (offset);
+
+  return map;
+}
+
+// ---------------------------------------------------------------------------
 // Vacature scraper-specific fetch (uses field names, not IDs)
 // ---------------------------------------------------------------------------
 
