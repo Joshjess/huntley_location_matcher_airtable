@@ -78,6 +78,8 @@ const FILTER_FIELDS: Record<SearchMode, readonly FilterTemplate[]> = {
   ],
 };
 
+export const PROFIELGROEP_FIELD_ID = "fldE8B6sT0k0pbaXB";
+
 export function getFilterTemplates(searchMode: SearchMode): readonly FilterTemplate[] {
   return FILTER_FIELDS[searchMode];
 }

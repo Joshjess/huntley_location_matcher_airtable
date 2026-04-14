@@ -1,5 +1,6 @@
 import React from "react";
 import { useSearchContext } from "../../context/SearchContext";
+import { ProfielgroepSelector } from "./ProfielgroepSelector";
 
 export function FilterPanel(): React.ReactElement {
   const { filters, handleFilterChange, currentFilters, dateRange, setDateRange } = useSearchContext();
@@ -42,7 +43,8 @@ export function FilterPanel(): React.ReactElement {
           </label>
         </div>
       </div>
-      {currentFilters.map((filter) => {
+      <ProfielgroepSelector />
+      {/* {currentFilters.map((filter) => {
         const selected = filters[filter.fieldId] ?? [];
         return (
           <div key={filter.fieldId} className="filter-group">
@@ -63,7 +65,7 @@ export function FilterPanel(): React.ReactElement {
             </div>
           </div>
         );
-      })}
+      })} */}
       {activeFilterCount > 0 && (
         <button
           className="btn-clear-filters"

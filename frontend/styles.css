@@ -797,6 +797,25 @@ body {
   color: var(--color-text-primary);
 }
 
+/* Profielgroep Selector */
+.profielgroep-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.375rem 0;
+  font-size: 0.8125rem;
+}
+
+.profielgroep-selector__label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.profielgroep-selector__select {
+  max-width: 320px;
+}
+
 /* Source Checkboxes */
 .source-checkboxes {
   display: flex;

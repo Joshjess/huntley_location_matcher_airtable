@@ -19,6 +19,7 @@ export function SearchBar(): React.ReactElement {
     <div className="search-bar-container">
       <ModeToggle />
       <SourceSelector />
+
       <div className="card search-bar">
         <SearchInputRow
           filtersOpen={filtersOpen}
