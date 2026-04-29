@@ -4,12 +4,14 @@ import { FilterMap } from "../utils/filters";
 import {
   SearchMode,
   SearchResult,
+  SearchSource,
   SearchStats,
   GeocodedLocation,
   SearchSourceConfig,
   DateRange,
   FilterDefinition,
 } from "../types";
+import { VacatureScraperVacancy } from "../utils/airtableRest";
 
 interface SearchContextValue {
   searchMode: SearchMode;
@@ -31,10 +33,15 @@ interface SearchContextValue {
   results: SearchResult[] | null;
   geocodedLocation: GeocodedLocation | null;
   stats: SearchStats | null;
-  handleExpand: (id: string) => void;
+  handleExpand: (id: string, source: SearchSource) => void;
+  selectedScraperRecord: VacatureScraperVacancy | null;
+  closeScraperPane: () => void;
   searchSources: SearchSourceConfig;
   handleSearchSourceChange: (source: keyof SearchSourceConfig, enabled: boolean) => void;
   hasPat: boolean;
+  hotlistEnabled: boolean;
+  setHotlistEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  hotlistCompanyIds: ReadonlySet<string>;
 }
 
 const SearchContext = createContext<SearchContextValue | null>(null);
@@ -89,9 +96,14 @@ export function SearchProvider({ pat, hasPat, children }: SearchProviderProps): 
     geocodedLocation: search.geocodedLocation,
     stats: search.stats,
     handleExpand: search.handleExpand,
+    selectedScraperRecord: search.selectedScraperRecord,
+    closeScraperPane: search.closeScraperPane,
     searchSources: search.searchSources,
     handleSearchSourceChange,
     hasPat,
+    hotlistEnabled: search.hotlistEnabled,
+    setHotlistEnabled: search.setHotlistEnabled,
+    hotlistCompanyIds: search.hotlistCompanyIds,
   };
 
   return <SearchContext.Provider value={value}>{children}</SearchContext.Provider>;

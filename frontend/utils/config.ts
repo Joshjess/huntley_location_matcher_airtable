@@ -80,6 +80,35 @@ const FILTER_FIELDS: Record<SearchMode, readonly FilterTemplate[]> = {
 
 export const PROFIELGROEP_FIELD_ID = "fldE8B6sT0k0pbaXB";
 
+// ---------------------------------------------------------------------------
+// Candidate display fields — resolved by name at runtime (not filter fields)
+// ---------------------------------------------------------------------------
+
+export const CANDIDATE_DISPLAY_FIELD_NAMES = [
+  "Leeftijd", "Huidige Functie", "Profielgroep",
+  "Locatie", "Gemeente", "Provincie",
+  "Werkervaring Vakgebied", "Sectoren", "Certificaten", "Diploma/Opleiding",
+  "Email", "Telefoonnummer",
+  "Interne Notities", "Assignee", "Status",
+  "Cv kandidaat", "Attachment Summary",
+  "Rijbewijs B", "Situatie/Motivatie", "Contact Voorkeur",
+  "Bron", "Trello Card URL", "Salaris Verwachting", "Beschikbaarheid",
+  "Tags", "Procedures", "Campagne", "Typeform Antwoorden Volledig",
+] as const;
+
+export function resolveDisplayFieldIds(
+  table: Table,
+  fieldNames: readonly string[],
+): Map<string, string> {
+  const nameToId = new Map<string, string>();
+  for (const field of table.fields) {
+    if ((fieldNames as readonly string[]).includes(field.name)) {
+      nameToId.set(field.name, field.id);
+    }
+  }
+  return nameToId;
+}
+
 export function getFilterTemplates(searchMode: SearchMode): readonly FilterTemplate[] {
   return FILTER_FIELDS[searchMode];
 }

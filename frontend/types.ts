@@ -28,6 +28,8 @@ export interface VacancySearchResult {
   /** Lowercased concatenation of vacancy + linked company searchable fields */
   readonly keywordHaystack: string;
   readonly createdAt: string | null;
+  /** Linked company record IDs (used for hotlist filtering) */
+  readonly companyIds: readonly string[];
 }
 
 export interface CompanySearchResult {
@@ -48,6 +50,7 @@ export interface CandidateSearchResult {
   readonly name: string;
   readonly distance: number;
   readonly filterValues: Readonly<Record<string, FilterValue>>;
+  readonly displayFields: Readonly<Record<string, string | null>>;
   readonly keywordHaystack: string;
   readonly createdAt: string | null;
 }
@@ -69,11 +72,6 @@ export interface SearchStats {
   readonly filteredOut: number;
   readonly vacatureScraperTotal?: number;
   readonly vacatureScraperMatched?: number;
-}
-
-export interface RadiusOption {
-  readonly value: string;
-  readonly label: string;
 }
 
 export interface FilterTemplate {
@@ -99,7 +97,7 @@ export interface LinkedRecordCellValue {
 
 export interface ResultCardProps {
   readonly result: SearchResult;
-  readonly onExpand: (id: string) => void;
+  readonly onExpand: (id: string, source: SearchSource) => void;
 }
 
 export interface StatsBarProps {
@@ -112,7 +110,7 @@ export interface SearchResultsProps {
   readonly stats: SearchStats;
   readonly radius: string;
   readonly searchMode: SearchMode;
-  readonly onExpand: (id: string) => void;
+  readonly onExpand: (id: string, source: SearchSource) => void;
 }
 
 export interface GeocodedLocationInfoProps {

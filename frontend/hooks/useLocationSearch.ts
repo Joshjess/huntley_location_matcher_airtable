@@ -7,9 +7,11 @@ import {
   SearchResult,
   SearchStats,
   SearchMode,
+  SearchSource,
   SearchSourceConfig,
   DateRange,
   FilterDefinition,
+  VacancySearchResult,
 } from "../types";
 import { geocodeLocation } from "../utils/geo";
 import { SCHEMA, getFilterTemplates } from "../utils/config";
@@ -18,8 +20,9 @@ import { buildCompanyKeywordHaystack, buildCandidateKeywordHaystack } from "../u
 import { FilterMap, applyFilters } from "../utils/filters";
 import { BaseStats } from "../utils/searchProcessor";
 import { processVacancyRecords, processSimpleRecords, processVacatureScraperRecords } from "../utils/searchProcessor";
-import { FetchResult, fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchVacatureScraperData } from "../utils/dataFetcher";
+import { FetchResult, fetchVacancyData, fetchCompanyData, fetchCandidateData, fetchVacatureScraperData, fetchHotlistCompanyIds } from "../utils/dataFetcher";
 import { VacancyCoordinateResolution } from "../utils/coordinateResolution";
+import { VacatureScraperVacancy } from "../utils/airtableRest";
 
 export type { FilterMap } from "../utils/filters";
 
@@ -41,11 +44,16 @@ interface UseLocationSearchReturn {
   stats: SearchStats | null;
   dynamicFilters: FilterDefinition[];
   handleSearch: () => void;
-  handleExpand: (id: string) => void;
+  handleExpand: (id: string, source: SearchSource) => void;
+  selectedScraperRecord: VacatureScraperVacancy | null;
+  closeScraperPane: () => void;
   searchSources: SearchSourceConfig;
   setSearchSources: React.Dispatch<React.SetStateAction<SearchSourceConfig>>;
   dateRange: DateRange;
   setDateRange: React.Dispatch<React.SetStateAction<DateRange>>;
+  hotlistEnabled: boolean;
+  setHotlistEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  hotlistCompanyIds: ReadonlySet<string>;
 }
 
 interface LocalSearchCacheEntry {
@@ -142,7 +150,11 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
   const [geocodedLocation, setGeocodedLocation] = useState<GeocodedLocation | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
+  const [hotlistEnabled, setHotlistEnabled] = useState(false);
+  const [hotlistCompanyIds, setHotlistCompanyIds] = useState<Set<string>>(new Set());
   const cachedQueryRef = useRef<TableOrViewQueryResult | null>(null);
+  const scraperRecordsRef = useRef<Map<string, VacatureScraperVacancy>>(new Map());
   const localSearchCacheRef = useRef<Partial<Record<SearchMode, LocalSearchCacheEntry>>>({});
   const pendingLocalSearchCacheRef = useRef<Partial<Record<SearchMode, PendingLocalSearchCacheEntry>>>({});
 
@@ -153,6 +165,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     setUnfilteredResults(null);
     setBaseStats(null);
     setError(null);
+    setHotlistEnabled(false);
   }, []);
 
   const unloadCachedQueries = useCallback((): void => {
@@ -274,7 +287,21 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
       });
     }
 
-    const { filtered } = applyFilters(afterKeyword, filters);
+    // Hotlist filter
+    let afterHotlist = afterKeyword;
+    if (hotlistEnabled) {
+      if (hotlistCompanyIds.size === 0) {
+        afterHotlist = [];
+      } else {
+        afterHotlist = afterKeyword.filter((r) => {
+          if (r.mode === "company") return hotlistCompanyIds.has(r.id);
+          if (r.mode === "vacancy") return (r as VacancySearchResult).companyIds.some((cid) => hotlistCompanyIds.has(cid));
+          return true;
+        });
+      }
+    }
+
+    const { filtered } = applyFilters(afterHotlist, filters);
     const filteredOut = unfilteredResults.length - filtered.length;
 
     let fromVacancy = 0, fromCompany = 0, fromLocation = 0, vacatureScraperMatched = 0;
@@ -307,7 +334,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     };
 
     return { results: filtered, stats };
-  }, [unfilteredResults, baseStats, filters, keywordTokens, dateRange]);
+  }, [unfilteredResults, baseStats, filters, keywordTokens, dateRange, hotlistEnabled, hotlistCompanyIds]);
 
   // ---------------------------------------------------------------------------
   // Filter field metadata — templates are hardcoded, options from SDK metadata
@@ -395,6 +422,9 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     setError(null);
     setUnfilteredResults(null);
     setBaseStats(null);
+    setSelectedScraperId(null);
+    setHotlistCompanyIds(new Set());
+    scraperRecordsRef.current = new Map();
     cachedQueryRef.current = null;
 
     const pat = vacatureScraperPat.trim();
@@ -416,6 +446,10 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
         return;
       }
 
+      const hotlistPromise = searchMode !== "candidate"
+        ? fetchHotlistCompanyIds(base)
+        : Promise.resolve(new Set<string>());
+
       if (searchMode === "candidate") {
         const filterTemplates = getFilterTemplates("candidate");
         const cacheEntry = await getLocalSearchCacheEntry("candidate", null);
@@ -429,6 +463,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
           lonFieldId: schema.candidate.lonFieldId,
           filterFieldIds: filterTemplates,
           buildHaystack: buildCandidateKeywordHaystack,
+          displayFieldIds: data.displayFieldIds,
         });
         if (data.cacheableQuery) cachedQueryRef.current = data.cacheableQuery;
         setUnfilteredResults(result.results);
@@ -488,8 +523,11 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
         let vacatureScraperResults: SearchResult[] = [];
         let vacatureScraperTotal = 0;
         if (searchSources.vacatureScraper && usePat && searchMode === "vacancy") {
-          const scraperRecords = await fetchVacatureScraperData(usePat, geo, maxDist);
-          const scraperResult = processVacatureScraperRecords(scraperRecords, geo, maxDist, new Map());
+          const fetched = await fetchVacatureScraperData(usePat, geo, maxDist);
+          const rawById = new Map<string, VacatureScraperVacancy>();
+          for (const vac of fetched.raw) rawById.set(vac.id, vac);
+          scraperRecordsRef.current = rawById;
+          const scraperResult = processVacatureScraperRecords(fetched.records, geo, maxDist, new Map());
           vacatureScraperResults = scraperResult.results;
           vacatureScraperTotal = scraperResult.total;
         }
@@ -501,6 +539,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
           vacatureScraperTotal,
           vacatureScraperMatched: vacatureScraperResults.length,
         });
+        setHotlistCompanyIds(await hotlistPromise);
       }
     } catch (err) {
       setError(`Er ging iets mis: ${(err as Error).message}`);
@@ -509,7 +548,13 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     }
   }, [locationQuery, radius, searchMode, searchSources, vacatureScraperPat, getLocalSearchCacheEntry, schema, vacancyExclude, companyExclude]);
 
-  const handleExpand = useCallback((id: string): void => {
+  const handleExpand = useCallback((id: string, source: SearchSource): void => {
+    if (source === "vacatureScraper") {
+      if (scraperRecordsRef.current.has(id)) {
+        setSelectedScraperId(id);
+      }
+      return;
+    }
     const record = cachedQueryRef.current?.getRecordByIdIfExists(id);
     if (record) {
       expandRecord(record);
@@ -522,6 +567,13 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
         : schema.vacancy.tableId;
     if (tableId) window.open(`https://airtable.com/${base.id}/${tableId}/${id}`, "_blank");
   }, [base, searchMode, schema]);
+
+  const closeScraperPane = useCallback(() => setSelectedScraperId(null), []);
+
+  const selectedScraperRecord = useMemo(() => {
+    if (!selectedScraperId) return null;
+    return scraperRecordsRef.current.get(selectedScraperId) ?? null;
+  }, [selectedScraperId]);
 
   return {
     searchMode,
@@ -542,9 +594,14 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
     dynamicFilters,
     handleSearch,
     handleExpand,
+    selectedScraperRecord,
+    closeScraperPane,
     searchSources,
     setSearchSources,
     dateRange,
     setDateRange,
+    hotlistEnabled,
+    setHotlistEnabled,
+    hotlistCompanyIds,
   };
 }

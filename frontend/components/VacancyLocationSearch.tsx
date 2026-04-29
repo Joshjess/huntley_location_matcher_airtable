@@ -8,6 +8,7 @@ import { GeocodedLocationInfo } from "./GeocodedLocationInfo";
 import { StatsBar } from "./StatsBar";
 import { SearchResults } from "./SearchResults";
 import { SettingsPanel } from "./SettingsPanel";
+import { VacatureScraperSidePane } from "./VacatureScraperSidePane";
 
 const MODE_TEXT = {
   vacancy: {
@@ -60,6 +61,8 @@ function VacancyLocationSearchInner({ isShowingSettings, setIsShowingSettings, p
     stats,
     results,
     handleExpand,
+    selectedScraperRecord,
+    closeScraperPane,
   } = useSearchContext();
 
   const text = MODE_TEXT[searchMode];
@@ -130,6 +133,8 @@ function VacancyLocationSearchInner({ isShowingSettings, setIsShowingSettings, p
           </p>
         </div>
       )}
+
+      <VacatureScraperSidePane record={selectedScraperRecord} onClose={closeScraperPane} />
     </div>
   );
 }

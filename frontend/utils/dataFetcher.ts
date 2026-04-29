@@ -1,9 +1,47 @@
-import { Base, Record as AirtableRecord, Table, TableOrViewQueryResult } from "@airtable/blocks/models";
+import { Base, Field, Record as AirtableRecord, Table, TableOrViewQueryResult } from "@airtable/blocks/models";
 import { GeocodedLocation } from "../types";
 import { computeBoundingBox } from "./geo";
-import { SCHEMA, ResolvedSchema, getFilterTemplates, getQueryFields, getSearchableFieldIds, getTable, uniqueFieldIds } from "./config";
-import { fetchCoordinateData, fetchVacatureScraperVacancies } from "./airtableRest";
+import { SCHEMA, ResolvedSchema, getFilterTemplates, getQueryFields, getSearchableFieldIds, getTable, uniqueFieldIds, CANDIDATE_DISPLAY_FIELD_NAMES, resolveDisplayFieldIds } from "./config";
+import { fetchCoordinateData, fetchVacatureScraperVacancies, VacatureScraperVacancy } from "./airtableRest";
 import { RecordAccessor, fromSdkRecord, withFloatOverrides, fromVacatureScraperRecord } from "./recordAccessor";
+
+const HOTLIST_TABLE_ID = "tbl85e1i2UMq5718U";
+
+export async function fetchHotlistCompanyIds(base: Base): Promise<Set<string>> {
+  const table = base.getTableByIdIfExists(HOTLIST_TABLE_ID);
+  if (!table) return new Set();
+
+  let linkField: Field | null = null;
+  for (const field of table.fields) {
+    if (field.type !== "multipleRecordLinks") continue;
+    try {
+      const options = field.config.options as { linkedTableId?: string } | null;
+      if (options?.linkedTableId === SCHEMA.company.tableId) {
+        linkField = field;
+        break;
+      }
+    } catch { /* ignore */ }
+  }
+  if (!linkField) {
+    console.warn("Hotlist: no linked record field found pointing to company table.");
+    return new Set();
+  }
+
+  const query = await table.selectRecordsAsync({ fields: [linkField] });
+  try {
+    const ids = new Set<string>();
+    for (const record of query.records) {
+      const raw = record.getCellValue(linkField);
+      if (!Array.isArray(raw)) continue;
+      for (const linked of raw as Array<{ id: string }>) {
+        if (linked?.id) ids.add(linked.id);
+      }
+    }
+    return ids;
+  } finally {
+    query.unloadData();
+  }
+}
 
 export interface FetchResult {
   readonly records: RecordAccessor[];
@@ -11,6 +49,7 @@ export interface FetchResult {
   readonly locationMap: ReadonlyMap<string, RecordAccessor>;
   readonly companyLocationLinks: ReadonlyMap<string, string[]>;
   readonly filterFieldIds: readonly { fieldId: string }[];
+  readonly displayFieldIds?: ReadonlyMap<string, string>;
   readonly totalFetched: number;
   readonly queriesToUnload: (TableOrViewQueryResult | null)[];
   readonly cacheableQuery: TableOrViewQueryResult | null;
@@ -278,13 +317,17 @@ export async function fetchCandidateData(
   const candidateTable = getTable(base, schema.candidate.tableId);
   if (!candidateTable) throw new Error("Kandidaten tabel niet gevonden.");
   const candidateFieldIds = getCandidateQueryFieldIds(candidateTable, schema);
+  const displayFieldIds = resolveDisplayFieldIds(candidateTable, CANDIDATE_DISPLAY_FIELD_NAMES);
+
+  // Merge display field IDs into the query so the SDK loads them
+  const allFieldIds = uniqueFieldIds(candidateFieldIds, [...displayFieldIds.values()]);
 
   const candidateQuery = await candidateTable.selectRecordsAsync({
-    fields: getQueryFields(candidateTable, candidateFieldIds),
+    fields: getQueryFields(candidateTable, allFieldIds),
   });
 
   try {
-    const records = candidateQuery.records.map((rec) => fromSdkRecord(rec, candidateTable, candidateFieldIds));
+    const records = candidateQuery.records.map((rec) => fromSdkRecord(rec, candidateTable, allFieldIds));
 
     return {
       records,
@@ -292,6 +335,7 @@ export async function fetchCandidateData(
       locationMap: new Map(),
       companyLocationLinks: new Map(),
       filterFieldIds: getFilterTemplates("candidate"),
+      displayFieldIds,
       totalFetched: candidateQuery.records.length,
       queriesToUnload: [],
       cacheableQuery: candidateQuery,
@@ -306,12 +350,20 @@ export async function fetchCandidateData(
 // Vacature scraper data fetching (REST API — external base)
 // ---------------------------------------------------------------------------
 
+export interface VacatureScraperFetchResult {
+  readonly records: RecordAccessor[];
+  readonly raw: readonly VacatureScraperVacancy[];
+}
+
 export async function fetchVacatureScraperData(
   pat: string,
   geo: GeocodedLocation,
   maxDist: number,
-): Promise<RecordAccessor[]> {
+): Promise<VacatureScraperFetchResult> {
   const boundingBox = computeBoundingBox(geo.lat, geo.lon, maxDist);
   const vacancies = await fetchVacatureScraperVacancies(pat, boundingBox);
-  return vacancies.map((vac) => fromVacatureScraperRecord(vac));
+  return {
+    records: vacancies.map((vac) => fromVacatureScraperRecord(vac)),
+    raw: vacancies,
+  };
 }

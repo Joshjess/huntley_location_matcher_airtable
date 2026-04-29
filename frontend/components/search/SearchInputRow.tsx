@@ -1,6 +1,5 @@
 import React from "react";
 import { MagnifyingGlassIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
-import { RADIUS_OPTIONS } from "../../constants";
 import { useSearchContext } from "../../context/SearchContext";
 
 interface SearchInputRowProps {
@@ -36,15 +35,19 @@ export function SearchInputRow({ filtersOpen, onToggleFilters, activeFilterCount
       </div>
       <div className="field-group field-group--radius">
         <label className="field-label">Straal</label>
-        <select
-          className="select"
-          value={radius}
-          onChange={(e) => setRadius(e.target.value)}
-        >
-          {RADIUS_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
+        <div className="input-wrapper input-wrapper--suffix">
+          <input
+            className="input input--radius"
+            type="number"
+            min="1"
+            step="1"
+            value={radius}
+            onChange={(e) => setRadius(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="25"
+          />
+          <span className="input-suffix">km</span>
+        </div>
       </div>
       <button
         className={`btn-icon ${filtersOpen ? "btn-icon--active" : ""}`}

@@ -138,6 +138,7 @@ export function processVacancyRecords(input: ProcessVacancyInput): {
         filterValues,
         keywordHaystack,
         createdAt: vacancy.createdAt,
+        companyIds: vacancy.getLinkedIds(schema.vacancy.companyLinkFieldId),
       });
       continue;
     }
@@ -203,6 +204,7 @@ export function processVacancyRecords(input: ProcessVacancyInput): {
       filterValues,
       keywordHaystack,
       createdAt: vacancy.createdAt,
+      companyIds: vacancy.getLinkedIds(schema.vacancy.companyLinkFieldId),
     });
   }
 
@@ -232,13 +234,15 @@ interface ProcessSimpleInput {
   readonly lonFieldId: string;
   readonly filterFieldIds: readonly { fieldId: string }[];
   readonly buildHaystack: (accessor: RecordAccessor) => string;
+  /** Map of display field name → field ID, used for candidate cards */
+  readonly displayFieldIds?: ReadonlyMap<string, string>;
 }
 
 export function processSimpleRecords(input: ProcessSimpleInput): {
   results: SearchResult[];
   baseStats: BaseStats;
 } {
-  const { mode, records, geo, maxDist, latFieldId, lonFieldId, filterFieldIds, buildHaystack } = input;
+  const { mode, records, geo, maxDist, latFieldId, lonFieldId, filterFieldIds, buildHaystack, displayFieldIds } = input;
   const boundingBox = computeBoundingBox(geo.lat, geo.lon, maxDist);
 
   const allWithinRadius: (CompanySearchResult | CandidateSearchResult)[] = [];
@@ -262,6 +266,13 @@ export function processSimpleRecords(input: ProcessSimpleInput): {
     const keywordHaystack = buildHaystack(rec);
     const fallbackName = mode === "company" ? "Naamloos bedrijf" : "Naamloze kandidaat";
 
+    const displayFields: Record<string, string | null> = {};
+    if (displayFieldIds) {
+      for (const [fieldName, fieldId] of displayFieldIds) {
+        displayFields[fieldName] = rec.getString(fieldId);
+      }
+    }
+
     allWithinRadius.push({
       mode,
       source: "local" as SearchSource,
@@ -269,6 +280,7 @@ export function processSimpleRecords(input: ProcessSimpleInput): {
       name: rec.name || fallbackName,
       distance,
       filterValues,
+      ...(mode === "candidate" ? { displayFields } : {}),
       keywordHaystack,
       createdAt: rec.createdAt,
     } as CompanySearchResult | CandidateSearchResult);
@@ -325,6 +337,7 @@ export function processVacatureScraperRecords(
       filterValues,
       keywordHaystack: buildVacatureScraperKeywordHaystack(rec),
       createdAt: rec.createdAt,
+      companyIds: [],
     });
   }
 
