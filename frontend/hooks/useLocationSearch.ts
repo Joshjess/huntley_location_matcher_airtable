@@ -109,6 +109,25 @@ function mergeSortedResults(
   return merged;
 }
 
+/**
+ * Drop vacancy results whose normalized URL was already seen. Keeps the first
+ * occurrence — when called on a distance-sorted list, that is the nearest copy.
+ * Non-vacancy results and vacancies without a URL always pass through.
+ */
+function dedupeByUrl(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>();
+  const out: SearchResult[] = [];
+  for (const r of results) {
+    const url = r.mode === "vacancy" ? (r as VacancySearchResult).url : null;
+    if (url) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+    }
+    out.push(r);
+  }
+  return out;
+}
+
 function scheduleIdleTask(task: () => void): () => void {
   const idleWindow = window as Window & {
     requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
@@ -532,7 +551,7 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
           vacatureScraperTotal = scraperResult.total;
         }
 
-        const allResults = mergeSortedResults(localResults, vacatureScraperResults);
+        const allResults = dedupeByUrl(mergeSortedResults(localResults, vacatureScraperResults));
         setUnfilteredResults(allResults);
         setBaseStats({
           ...localStats,

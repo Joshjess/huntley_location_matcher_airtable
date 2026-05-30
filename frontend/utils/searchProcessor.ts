@@ -11,6 +11,7 @@ import { computeBoundingBox, haversineKm } from "./geo";
 import { ResolvedSchema } from "./config";
 import { resolveVacancyCoordinates, VacancyCoordinateResolution } from "./coordinateResolution";
 import { RecordAccessor } from "./recordAccessor";
+import { extractVacancyUrl } from "./vacancyUrl";
 import {
   buildVacancyKeywordHaystack,
   buildCompanyKeywordHaystack,
@@ -139,6 +140,7 @@ export function processVacancyRecords(input: ProcessVacancyInput): {
         keywordHaystack,
         createdAt: vacancy.createdAt,
         companyIds: vacancy.getLinkedIds(schema.vacancy.companyLinkFieldId),
+        url: extractVacancyUrl(vacancy),
       });
       continue;
     }
@@ -205,6 +207,7 @@ export function processVacancyRecords(input: ProcessVacancyInput): {
       keywordHaystack,
       createdAt: vacancy.createdAt,
       companyIds: vacancy.getLinkedIds(schema.vacancy.companyLinkFieldId),
+      url: extractVacancyUrl(vacancy),
     });
   }
 
@@ -338,6 +341,7 @@ export function processVacatureScraperRecords(
       keywordHaystack: buildVacatureScraperKeywordHaystack(rec),
       createdAt: rec.createdAt,
       companyIds: [],
+      url: extractVacancyUrl(rec),
     });
   }
 

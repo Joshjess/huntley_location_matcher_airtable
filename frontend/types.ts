@@ -30,6 +30,8 @@ export interface VacancySearchResult {
   readonly createdAt: string | null;
   /** Linked company record IDs (used for hotlist filtering) */
   readonly companyIds: readonly string[];
+  /** Normalized vacancy URL used to de-duplicate results across sources (null if none) */
+  readonly url: string | null;
 }
 
 export interface CompanySearchResult {
