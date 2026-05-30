@@ -1,0 +1,32 @@
+flowchart TD
+    Start([Zoek een locatie]) --> Loop[Controleer elke vacature]
+
+    Loop --> Q1{Heeft de vacature<br/>een eigen adres?}
+
+    Q1 -->|Ja| UseVac[Gebruik het<br/>vacature-adres]
+    Q1 -->|Nee| Q2{Heeft het bedrijf<br/>een adres?}
+
+    Q2 -->|Ja| UseCo[Gebruik het<br/>bedrijfsadres]
+    Q2 -->|Nee| Q3{Heeft het bedrijf<br/>andere vestigingen?}
+
+    Q3 -->|Ja| UseLoc[Gebruik de<br/>dichtstbijzijnde vestiging]
+    Q3 -->|Nee| Skip[Sla deze vacature over<br/>geen adres bekend]
+
+    UseVac --> Check{Ligt het binnen<br/>de zoekstraal?}
+    UseCo --> Check
+    UseLoc --> Check
+
+    Check -->|Ja| Show[Toon in resultaten]
+    Check -->|Nee| Hide[Verberg uit resultaten]
+
+    classDef start fill:#2563eb,stroke:#1e40af,color:#fff,font-size:16px
+    classDef question fill:#a78bfa,stroke:#6d28d9,color:#fff,font-size:15px
+    classDef good fill:#10b981,stroke:#047857,color:#fff,font-size:15px
+    classDef bad fill:#ef4444,stroke:#991b1b,color:#fff,font-size:15px
+    classDef use fill:#f59e0b,stroke:#b45309,color:#fff,font-size:15px
+
+    class Start,Loop start
+    class Q1,Q2,Q3,Check question
+    class UseVac,UseCo,UseLoc use
+    class Show good
+    class Skip,Hide bad
