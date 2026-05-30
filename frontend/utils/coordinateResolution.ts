@@ -52,7 +52,8 @@ function isWithinBoundingBox(
 
 /**
  * Resolve vacancy coordinates through the fallback chain:
- * vacancy direct coords → company coords → alternative location coords.
+ * vacancy direct coords → company coords.
+ * (Secondary/alternative company locations are intentionally not considered.)
  *
  * Works uniformly for both SDK and REST records via RecordAccessor.
  */
@@ -142,30 +143,6 @@ export function resolveVacancyCoordinates({
           lon: companyLon,
           source: "company",
           distanceKm: haversineKm(searchLat, searchLon, companyLat, companyLon),
-        });
-      }
-    }
-
-    const locationIds = companyLocationLinks.get(companyId) ?? [];
-    if (locationIds.length > 0) {
-      diagnostics.hadAlternativeLocationLink = true;
-    }
-
-    for (const locationId of locationIds) {
-      const location = locationMap.get(locationId);
-      if (!location) continue;
-
-      const locLat = location.getFloat(locationLatFieldId);
-      const locLon = location.getFloat(locationLonFieldId);
-      if (locLat == null || locLon == null) continue;
-
-      diagnostics.hadAlternativeLocationCoords = true;
-      if (isWithinBoundingBox(locLat, locLon, boundingBox)) {
-        considerCandidate({
-          lat: locLat,
-          lon: locLon,
-          source: "location",
-          distanceKm: haversineKm(searchLat, searchLon, locLat, locLon),
         });
       }
     }
