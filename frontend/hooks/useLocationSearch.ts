@@ -360,15 +360,16 @@ export function useLocationSearch(vacatureScraperPat: string): UseLocationSearch
   // ---------------------------------------------------------------------------
   const fieldMetadata = useMemo(() => {
     const templates = getFilterTemplates(searchMode);
-    const tableId = searchMode === "vacancy"
+    const defaultTableId = searchMode === "vacancy"
       ? schema.vacancy.tableId
       : searchMode === "company"
         ? schema.company.tableId
         : schema.candidate.tableId;
-    const table = base.getTableByIdIfExists(tableId);
 
     return templates.map((template) => {
       let metadataOptions: string[] = [];
+      const lookupTableId = template.tableId ?? defaultTableId;
+      const table = base.getTableByIdIfExists(lookupTableId);
       if (table) {
         const field = table.getFieldByIdIfExists(template.fieldId);
         if (field) {

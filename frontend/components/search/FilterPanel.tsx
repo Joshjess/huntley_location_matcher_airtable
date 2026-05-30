@@ -1,6 +1,7 @@
 import React from "react";
 import { useSearchContext } from "../../context/SearchContext";
-import { ProfielgroepSelector } from "./ProfielgroepSelector";
+import { SingleSelectFilter } from "./SingleSelectFilter";
+import { COMPANY_SECTOR_FIELD_ID, PROFIELGROEP_FIELD_ID } from "../../utils/config";
 
 function FlameIcon({ filled, size = 16 }: { filled?: boolean; size?: number }): React.ReactElement {
   return (
@@ -17,19 +18,13 @@ export function FilterPanel(): React.ReactElement {
   } = useSearchContext();
 
   const showHotlist = searchMode === "vacancy" || searchMode === "company";
+  const showSector = searchMode === "vacancy" || searchMode === "company";
+  const showProfielgroep = searchMode === "candidate";
 
   const activeFilterCount = Object.values(filters).reduce(
     (sum, vals) => sum + vals.length,
     0,
   ) + (dateRange.from ? 1 : 0) + (dateRange.to ? 1 : 0) + (hotlistEnabled ? 1 : 0);
-
-  const toggleFilterValue = (fieldId: string, value: string): void => {
-    const current = filters[fieldId] ?? [];
-    const next = current.includes(value)
-      ? current.filter((v) => v !== value)
-      : [...current, value];
-    handleFilterChange(fieldId, next);
-  };
 
   return (
     <div className="card filters-panel">
@@ -70,29 +65,20 @@ export function FilterPanel(): React.ReactElement {
           </label>
         </div>
       </div>
-      <ProfielgroepSelector />
-      {/* {currentFilters.map((filter) => {
-        const selected = filters[filter.fieldId] ?? [];
-        return (
-          <div key={filter.fieldId} className="filter-group">
-            <div className="filter-group__label">{filter.label}</div>
-            <div className="filter-chips">
-              {filter.options.length > 0
-                ? filter.options.map((opt) => (
-                    <button
-                      key={opt}
-                      className={`filter-chip ${selected.includes(opt) ? "filter-chip--active" : ""}`}
-                      onClick={() => toggleFilterValue(filter.fieldId, opt)}
-                    >
-                      {opt}
-                    </button>
-                  ))
-                : <span className="filter-chips__empty">Zoek om opties te laden</span>
-              }
-            </div>
-          </div>
-        );
-      })} */}
+      {showSector && (
+        <SingleSelectFilter
+          fieldId={COMPANY_SECTOR_FIELD_ID}
+          label="Sector"
+          placeholder="Alle sectoren"
+        />
+      )}
+      {showProfielgroep && (
+        <SingleSelectFilter
+          fieldId={PROFIELGROEP_FIELD_ID}
+          label="Profielgroep"
+          placeholder="Alle profielgroepen"
+        />
+      )}
       {activeFilterCount > 0 && (
         <button
           className="btn-clear-filters"

@@ -64,21 +64,29 @@ export const SCHEMA: ResolvedSchema = {
 // Filter fields — hardcoded IDs, options discovered dynamically from data
 // ---------------------------------------------------------------------------
 
+export const COMPANY_SECTOR_FIELD_ID = "fldHLFawQFMgf2AkB";
+export const PROFIELGROEP_FIELD_ID = "fldE8B6sT0k0pbaXB";
+
 const FILTER_FIELDS: Record<SearchMode, readonly FilterTemplate[]> = {
-  vacancy: [],
+  vacancy: [
+    {
+      fieldId: COMPANY_SECTOR_FIELD_ID,
+      label: "Sector",
+      tableId: SCHEMA.company.tableId,
+      linkFromFieldId: SCHEMA.vacancy.companyLinkFieldId,
+    },
+  ],
   company: [
-    { fieldId: "fldHLFawQFMgf2AkB", label: "Sector" },
+    { fieldId: COMPANY_SECTOR_FIELD_ID, label: "Sector" },
   ],
   candidate: [
     { fieldId: "fldVOPaHYrnC3o4vF", label: "Functietitel" },
     { fieldId: "fld0RHj8yUB8wMi24", label: "Diploma/Opleiding" },
     { fieldId: "fldfXLEXSyO0PJ0sJ", label: "Certificaten" },
     { fieldId: "fldkdmX8fHoiWQtIq", label: "Werkervaring Vakgebied" },
-    { fieldId: "fldE8B6sT0k0pbaXB", label: "Profielgroep" },
+    { fieldId: PROFIELGROEP_FIELD_ID, label: "Profielgroep" },
   ],
 };
-
-export const PROFIELGROEP_FIELD_ID = "fldE8B6sT0k0pbaXB";
 
 // ---------------------------------------------------------------------------
 // Candidate display fields — resolved by name at runtime (not filter fields)

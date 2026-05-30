@@ -2,6 +2,7 @@ import {
   SearchResult,
   SearchSource,
   FilterValue,
+  FilterTemplate,
   GeocodedLocation,
   VacancySearchResult,
   CompanySearchResult,
@@ -50,13 +51,42 @@ interface ProcessVacancyInput {
   readonly companyMap: ReadonlyMap<string, RecordAccessor>;
   readonly locationMap: ReadonlyMap<string, RecordAccessor>;
   readonly companyLocationLinks: ReadonlyMap<string, string[]>;
-  readonly filterFieldIds: readonly { fieldId: string }[];
+  readonly filterFieldIds: readonly FilterTemplate[];
   readonly schema: ResolvedSchema;
   readonly vacancyExcludeFieldIds: Set<string>;
   readonly companyExcludeFieldIds: Set<string>;
   readonly companyKeywordHaystackCache?: Map<string, string>;
   readonly resolutionCache?: Map<string, VacancyCoordinateResolution>;
   readonly resolutionCacheKeyPrefix?: string;
+}
+
+function resolveTemplateValue(
+  template: FilterTemplate,
+  record: RecordAccessor,
+  companyMap: ReadonlyMap<string, RecordAccessor>,
+): FilterValue {
+  if (!template.linkFromFieldId) {
+    return record.getFilterValue(template.fieldId);
+  }
+  const linkedIds = record.getLinkedIds(template.linkFromFieldId);
+  if (linkedIds.length === 0) return null;
+  const collected: string[] = [];
+  const seen = new Set<string>();
+  for (const id of linkedIds) {
+    const linked = companyMap.get(id);
+    if (!linked) continue;
+    const value = linked.getFilterValue(template.fieldId);
+    if (value == null) continue;
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      if (item && !seen.has(item)) {
+        seen.add(item);
+        collected.push(item);
+      }
+    }
+  }
+  if (collected.length === 0) return null;
+  return collected.length === 1 ? collected[0] : collected;
 }
 
 function isWithinBoundingBox(
@@ -117,7 +147,7 @@ export function processVacancyRecords(input: ProcessVacancyInput): {
 
       const filterValues: Record<string, FilterValue> = {};
       for (const tmpl of filterFieldIds) {
-        filterValues[tmpl.fieldId] = vacancy.getFilterValue(tmpl.fieldId);
+        filterValues[tmpl.fieldId] = resolveTemplateValue(tmpl, vacancy, companyMap);
       }
 
       const keywordHaystack = buildVacancyKeywordHaystack(
@@ -184,7 +214,7 @@ export function processVacancyRecords(input: ProcessVacancyInput): {
 
     const filterValues: Record<string, FilterValue> = {};
     for (const tmpl of filterFieldIds) {
-      filterValues[tmpl.fieldId] = vacancy.getFilterValue(tmpl.fieldId);
+      filterValues[tmpl.fieldId] = resolveTemplateValue(tmpl, vacancy, companyMap);
     }
 
     const keywordHaystack = buildVacancyKeywordHaystack(
@@ -235,7 +265,7 @@ interface ProcessSimpleInput {
   readonly maxDist: number;
   readonly latFieldId: string;
   readonly lonFieldId: string;
-  readonly filterFieldIds: readonly { fieldId: string }[];
+  readonly filterFieldIds: readonly FilterTemplate[];
   readonly buildHaystack: (accessor: RecordAccessor) => string;
   /** Map of display field name → field ID, used for candidate cards */
   readonly displayFieldIds?: ReadonlyMap<string, string>;

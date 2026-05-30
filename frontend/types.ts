@@ -79,6 +79,10 @@ export interface SearchStats {
 export interface FilterTemplate {
   readonly fieldId: string;
   readonly label: string;
+  /** Table to look up field metadata in. Defaults to the search mode's main table. */
+  readonly tableId?: string;
+  /** When set, resolve this filter's value via linked records from this link field. */
+  readonly linkFromFieldId?: string;
 }
 
 export interface FilterDefinition {

@@ -1,5 +1,5 @@
 import { Base, Field, Record as AirtableRecord, Table, TableOrViewQueryResult } from "@airtable/blocks/models";
-import { GeocodedLocation } from "../types";
+import { FilterTemplate, GeocodedLocation } from "../types";
 import { computeBoundingBox } from "./geo";
 import { SCHEMA, ResolvedSchema, getFilterTemplates, getQueryFields, getSearchableFieldIds, getTable, uniqueFieldIds, CANDIDATE_DISPLAY_FIELD_NAMES, resolveDisplayFieldIds } from "./config";
 import { fetchCoordinateData, fetchVacatureScraperVacancies, VacatureScraperVacancy } from "./airtableRest";
@@ -48,7 +48,7 @@ export interface FetchResult {
   readonly companyMap: ReadonlyMap<string, RecordAccessor>;
   readonly locationMap: ReadonlyMap<string, RecordAccessor>;
   readonly companyLocationLinks: ReadonlyMap<string, string[]>;
-  readonly filterFieldIds: readonly { fieldId: string }[];
+  readonly filterFieldIds: readonly FilterTemplate[];
   readonly displayFieldIds?: ReadonlyMap<string, string>;
   readonly totalFetched: number;
   readonly queriesToUnload: (TableOrViewQueryResult | null)[];
